@@ -158,6 +158,86 @@ const API = {
     const score = rows.filter(x => x.ok).length;
     return { result: Object.assign(rec, { score, total: rows.length, parts: partsOf_(rows, !!rec.practice), rows, cut }), showAnswers: open.showAnswers, content };
   },
+  // 약점 분석: 내 기록(지금 열린 회차만)에서 과목·유형별 정답률(stats)과, 틀렸던 문항의 문제(정답 뺀 것)·틀린 횟수(groups)를 보낸다.
+  // 문항 키: 리딩 "r|회차|모듈|번호", 빈칸 "w|회차|모듈|번호", 리스닝 "l|회차 ID|모듈|번호"
+  myWrong(r) {
+    checkCode_(r.code);
+    const who = who_(r), open = openNow_(r), sheet = sheet_(SH.results), n = sheet.getLastRow() - 1, tally = {};
+    if (n > 0) {
+      const head = sheet.getRange(2, 2, n, 2).getValues(), cls = sheet.getRange(2, 16, n, 1).getValues();
+      for (let i = 0; i < n; i++) {
+        if (!mine_(who, head[i][0], cls[i][0])) continue;
+        let d = null; try { d = JSON.parse(sheet.getRange(i + 2, 13).getValue()); } catch (e) {}
+        if (!d || !Array.isArray(d.rows)) continue;
+        const testId = labelInfo_(head[i][1]).testId;
+        d.rows.forEach(x => {
+          const k = d.lc ? ['l', d.lc.id, x.mi, x.n].join('|') : [x.kind === 'w' ? 'w' : 'r', x.t != null ? x.t : testId, x.mi, x.n].join('|');
+          const c = tally[k] || (tally[k] = { wrong: 0, seen: 0, type: x.type }); c.seen++; if (!x.ok) c.wrong++;
+        });
+      }
+    }
+    // 유형별 정답률 [맞힌 수, 푼 수]: 리딩 rc { w: Complete the Words, r: Reading }, 리스닝 lc { response, conversation, announcement, talk }
+    const stats = { rc: {}, lc: {} };
+    Object.keys(tally).forEach(k => {
+      const p = k.split('|'), c = tally[k], lc = p[0] === 'l', id = p[1].split('-');
+      if (!(lc ? lcOpen_(open, { set: id[0], no: id[1] }) : rcOpen_(open, p[1]))) return;
+      const box = lc ? stats.lc : stats.rc, type = lc ? c.type || 'etc' : p[0], st = box[type] || (box[type] = [0, 0]);
+      st[0] += c.seen - c.wrong; st[1] += c.seen;
+    });
+    const wrong = Object.keys(tally).filter(k => tally[k].wrong).map(k => { const p = k.split('|'); return { k, kind: p[0], t: p[1], mi: Number(p[2]), n: Number(p[3]) }; });
+    const groups = [], cnt = k => tally[k];
+    // 리딩·빈칸: 지문마다 틀린 문항만. 빈칸 지문은 틀린 칸만 빈칸으로 두고 나머지는 채운 글로 보낸다
+    const rcIds = [...new Set(wrong.filter(w => w.kind !== 'l').map(w => Number(w.t)))].filter(id => rcOpen_(open, id)), tests = testsById_(rcIds);
+    rcIds.forEach(id => { const t = tests[id]; if (t) t.modules.forEach((m, mi) => m.sets.forEach(set => {
+      if (set.type === 'words') {
+        const ns = blanks_(set).map(b => b.n).filter(bn => tally['w|' + id + '|' + mi + '|' + bn] && tally['w|' + id + '|' + mi + '|' + bn].wrong);
+        if (!ns.length) return;
+        let i = 0;
+        const text = String(set.text).replace(/\[([a-z]+)\]/g, (a, w) => (ns.includes(set.start + i++) ? '[' + w.length + ']' : w));
+        groups.push({ kind: 'w', t: id, mi, text, ns, counts: ns.map(bn => { const c = cnt('w|' + id + '|' + mi + '|' + bn); return { wrong: c.wrong, seen: c.seen }; }) });
+      } else {
+        const qs = set.questions.filter(q => cnt('r|' + id + '|' + mi + '|' + q.n) && cnt('r|' + id + '|' + mi + '|' + q.n).wrong);
+        if (qs.length) groups.push({ kind: 'r', t: id, mi, sk: set.kind || '', title: set.title || '', passage: set.passage,
+          qs: qs.map(q => { const c = cnt('r|' + id + '|' + mi + '|' + q.n); return { n: q.n, q: q.q, c: q.c, insert: q.insert, wrong: c.wrong, seen: c.seen }; }) });
+      }
+    })); });
+    // 리스닝: 문항 묶음마다 틀린 문항만 (음원은 그 회차·모듈 묶음을 getAudio로 받는다)
+    [...new Set(wrong.filter(w => w.kind === 'l').map(w => w.t))].forEach(id => {
+      const t = loadLc_(id); if (!t || !lcOpen_(open, t)) return;
+      t.modules.forEach((m, mi) => m.items.forEach(it => {
+        const qs = it.questions.filter(q => cnt('l|' + id + '|' + mi + '|' + q.n) && cnt('l|' + id + '|' + mi + '|' + q.n).wrong);
+        if (qs.length) groups.push({ kind: 'l', t: id, title: t.title, mi, type: it.type, heading: it.heading, clip: it.audio.split('/').pop().replace(/\.mp3$/, ''),
+          mb: (t.packs || [])[mi] || 0, qs: qs.map(q => { const c = cnt('l|' + id + '|' + mi + '|' + q.n); return { n: q.n, q: q.q, c: q.c, wrong: c.wrong, seen: c.seen }; }) });
+      }));
+    });
+    return { stats, groups, showAnswers: open.showAnswers };
+  },
+  // 틀린 문제 다시 푼 답 채점 (기록은 남기지 않는다). answers: { 문항 키: 답 }. 정답·해설은 정답 공개일 때만
+  checkWrong(r) {
+    checkCode_(r.code);
+    const open = openNow_(r), answers = r.answers && typeof r.answers === 'object' ? r.answers : {}, out = {}, lc = {}, lcx = {};
+    const keys = Object.keys(answers).slice(0, 500), rc = testsById_(keys.filter(k => /^[rw]\|/.test(k)).map(k => k.split('|')[1]));
+    keys.forEach(k => {
+      const p = String(k).split('|'), mi = Number(p[2]), n = Number(p[3]), given = String(answers[k] || '');
+      let res = null;
+      if (p[0] === 'r' || p[0] === 'w') {
+        const id = Number(p[1]); if (!rcOpen_(open, id)) return;
+        const t = rc[id], m = t && t.modules[mi]; if (!m) return;
+        m.sets.forEach(set => {
+          if (p[0] === 'w' && set.type === 'words') { const b = blanks_(set).find(x => x.n === n); if (b) res = { ok: blankOk_(b, given), correct: b.ans, full: b.full }; }
+          if (p[0] === 'r' && set.type !== 'words') { const q = set.questions.find(x => x.n === n); if (q) res = { ok: given === q.a, correct: q.a }; }
+        });
+      } else if (p[0] === 'l') {
+        const t = p[1] in lc ? lc[p[1]] : (lc[p[1]] = loadLc_(p[1])); if (!t || !lcOpen_(open, t) || !t.modules[mi]) return;
+        t.modules[mi].items.forEach(it => it.questions.forEach(q => { if (q.n === n) res = { ok: given === q.a, correct: q.a }; }));
+        if (res && open.showAnswers) { const x = p[1] in lcx ? lcx[p[1]] : (lcx[p[1]] = loadLcx_(p[1])); if (x && x.q && x.q[mi + '-' + n]) res.ex = x.q[mi + '-' + n]; }
+      }
+      if (!res) return;
+      if (!open.showAnswers) res = { ok: res.ok };
+      out[k] = res;
+    });
+    return { results: out, showAnswers: open.showAnswers };
+  },
   // 관리자: 어떤 기록이든 문제와 함께 (닫힌 회차도, 정답과 리스닝 해설까지)
   adminResult(r) {
     checkPw_(r.pw);
