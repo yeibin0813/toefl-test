@@ -98,15 +98,15 @@ async function enter() {
 /* ---------- 내 기록 ---------- */
 // 서버에서 같은 반·이름의 기록을 받는다. 받는 동안 새로 낸 기록(added)은 받은 목록 앞에 붙인다.
 async function loadMine() {
-  const me = S.mine = { status: 'loading', list: null, added: (S.mine && S.mine.added) || [], more: false };
+  const cur = S.mine = { status: 'loading', list: null, added: (S.mine && S.mine.added) || [], more: false };
   const shows = () => ['home', 'pick', 'lcpick'].includes(S.screen);
   try {
     const j = await api('myResults', me());
-    if (S.mine !== me) return;  // 그사이 반·이름을 바꿨다
+    if (S.mine !== cur) return;  // 그사이 반·이름을 바꿨다
     const ids = new Set(j.results.map(a => a.id));
-    me.list = me.added.filter(a => !ids.has(a.id)).concat(j.results.map(a => Object.assign(a, { mod: a.practice ? 'w' : a.module })));
-    me.status = 'ok';
-  } catch (e) { if (S.mine !== me) return; me.status = 'err'; me.err = e.message; }
+    cur.list = cur.added.filter(a => !ids.has(a.id)).concat(j.results.map(a => Object.assign(a, { mod: a.practice ? 'w' : a.module })));
+    cur.status = 'ok';
+  } catch (e) { if (S.mine !== cur) return; cur.status = 'err'; cur.err = e.message; }
   if (shows()) render();
 }
 // 기록 목록 (아직 못 받았으면 null)
@@ -398,13 +398,13 @@ function viewResult() {
 /* ---------- 다시 보기 ---------- */
 // 기록 하나를 서버에서 받아 문제와 함께 보여 준다. 문제는 지금 열린 회차만, 정답은 정답 공개가 켜져 있을 때만 온다.
 async function openReview(id, back) {
-  const me = S.review = { id, back, status: 'loading', onlyWrong: false };
+  const cur = S.review = { id, back, status: 'loading', onlyWrong: false };
   S.screen = 'review'; render(); window.scrollTo(0, 0);
   try {
     const j = await api('myResult', Object.assign(me(), { id }));
-    if (S.review !== me) return;
-    Object.assign(me, { status: 'ok', r: j.result, showAnswers: j.showAnswers, content: j.content });
-  } catch (e) { if (S.review !== me) return; me.status = 'err'; me.err = e.message; }
+    if (S.review !== cur) return;
+    Object.assign(cur, { status: 'ok', r: j.result, showAnswers: j.showAnswers, content: j.content });
+  } catch (e) { if (S.review !== cur) return; cur.status = 'err'; cur.err = e.message; }
   if (S.screen === 'review') render();
 }
 // 목록에서 열었으면 그 기록 줄로 돌아간다
