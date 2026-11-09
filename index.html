@@ -17,6 +17,7 @@
 <script src="api.js"></script>
 <script src="review.js"></script>
 <script src="listening.js"></script>
+<script src="wrong.js"></script>
 <script>
 const LS = 'toefl-rq2';
 const lsGet = k => { try { return JSON.parse(localStorage.getItem(LS + k)); } catch (e) { return null; } };
@@ -276,6 +277,7 @@ function viewMine() {
   if (!M.list.length) return `<section class="stack">${head}<div class="note">아직 낸 기록이 없어요.</div></section>`;
   const SHOW = 20, list = M.more ? M.list : M.list.slice(0, SHOW);
   return `<section class="stack">${head}
+    <div class="toolbar"><button class="btn" data-act="wrongOpen"${S.busy ? ' disabled' : ''}>약점 분석</button><span class="note">과목별로 약한 유형을 보고 틀린 문제를 다시 풀어요</span></div>
     <div class="tablebox"><table><thead><tr><th>날짜</th><th>시험</th><th>점수</th><th></th></tr></thead><tbody>
     ${list.map(a => `<tr><td class="num">${fmtDate(a.finishedAt)}</td><td>${esc(recLabel(a))}</td><td class="num"><b>${scoreText(a)}</b></td>
       <td>${a.hidden ? '<span class="note">닫힌 회차</span>' : `<button class="btn small" data-act="review" data-id="${esc(a.id)}"${S.busy ? ' disabled' : ''}>다시 보기</button>`}</td></tr>`).join('')}
@@ -447,11 +449,11 @@ function viewModal() {
 function render() {
   const app = document.getElementById('app'), active = document.activeElement && document.activeElement.id;
   const view = S.screen === 'exam' && S.exam ? viewExam() : S.screen === 'result' && S.result ? viewResult() : S.screen === 'pick' && S.pick ? viewPick()
-    : S.screen === 'lcpick' && S.lcPick ? viewLcPick() : S.screen === 'review' && S.review ? viewReview() : viewHome();
+    : S.screen === 'lcpick' && S.lcPick ? viewLcPick() : S.screen === 'review' && S.review ? viewReview() : S.screen === 'wrong' && W ? viewWrong() : viewHome();
   app.innerHTML = topBar() + `<main class="wrap">${view}</main>` + viewModal();
   document.body.classList.toggle('exam-on', S.screen === 'exam' && !!S.exam);
-  document.body.classList.toggle('review-on', S.screen === 'review' && !!S.review);
-  if (S.screen === 'review') rvSync();
+  document.body.classList.toggle('review-on', (S.screen === 'review' && !!S.review) || (S.screen === 'wrong' && !!W));
+  if (S.screen === 'review' || S.screen === 'wrong') rvSync();
   if (active) { const el = document.getElementById(active); if (el) el.focus(); }
 }
 
@@ -493,7 +495,7 @@ document.addEventListener('input', ev => {
   // 제한 시간은 치는 동안에도 기억해 둔다 (내 기록을 받아 화면을 다시 그려도 친 값이 남게)
   if (el.id === 'wLim') { WR.lim = Math.max(0, Math.min(300, Number(el.value) || 0)); lsSet(':wr', WR); return; }
   if (el.classList.contains('lim') && S.pick && el.dataset.mi != null) { LIM[S.pick.test.id + '-' + el.dataset.mi] = Math.max(0, Math.min(120, Number(el.value) || 0)); lsSet(':lim', LIM); return; }
-  if (el.classList.contains('blank')) {
+  if (el.classList.contains('blank') && el.dataset.k && S.exam) {
     el.value = el.value.replace(/[^A-Za-z]/g, '').toLowerCase();
     S.exam.answers[el.dataset.k] = el.value; persist();
     if (el.value.length >= +el.dataset.len) { const all = [...document.querySelectorAll('input.blank')], i = all.indexOf(el); if (all[i + 1]) all[i + 1].focus(); }

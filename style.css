@@ -149,7 +149,7 @@ button.ins.on { background: var(--accent); color: var(--accent-ink); }
 .dot.done { background: var(--accent-soft); border-color: var(--accent); }
 .dot.cur { outline: 2px solid var(--accent); outline-offset: 1px; }
 .exam-on .passage, .exam-on .words, .exam-on .qs { user-select: none; -webkit-user-select: none; }
-.exam-on input.blank { user-select: text; -webkit-user-select: text; }
+.exam-on input.blank, .review-on input.blank { user-select: text; -webkit-user-select: text; }
 
 /* listening */
 .lcintro { max-width: 640px; }
@@ -174,6 +174,8 @@ button.ins.on { background: var(--accent); color: var(--accent-ink); }
 .part { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--paper); }
 .part .lbl { font-size: 12px; color: var(--muted); }
 .part .val { font-family: var(--font-num); font-size: 20px; font-weight: 600; }
+.part.weak { border-color: color-mix(in srgb, var(--bad) 50%, var(--line)); }
+.part.weak .val { color: var(--bad); }
 .mark { font-family: var(--font-num); font-weight: 600; }
 .mark.ok { color: var(--ok); }
 .mark.bad { color: var(--bad); }

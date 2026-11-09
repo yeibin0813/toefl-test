@@ -407,6 +407,12 @@ function rvTick() {
     bar.setAttribute('aria-valuetext', s.text);
   });
 }
+// 받은 음원(LCR.clips) 하나의 재생 버튼과 막대. 음원이 없으면 빈 문자열
+function rvPlayer(clip, heading) {
+  const s = LCR.clips && LCR.clips[clip] ? rvState(clip) : null;
+  return s ? `<div class="rvplay" data-clip="${esc(clip)}"><button class="btn small" data-act="rvPlay" data-clip="${esc(clip)}">${s.label}</button>
+        <input type="range" min="0" max="${s.max}" step="1" value="${s.value}" data-rvseek="${esc(clip)}" aria-label="${esc(heading)} 재생 위치" aria-valuetext="${s.text}"><span class="t num">${s.text}</span></div>` : '';
+}
 // 화면을 다시 그린 뒤: 틀는 음원의 재생기가 화면에서 빠졌으면(틀린 문항만 보기 등) 멈춘다
 function rvSync() {
   if (LCR.au && LCR.cur && !document.querySelector(`.rvplay[data-clip="${CSS.escape(LCR.cur)}"]`)) LCR.au.pause();
@@ -441,11 +447,7 @@ function lcReviewBody(V) {
   const bar = mine && LCR.clips ? '' : mine && LCR.loading ? `<div class="banner">음원을 불러오는 중이에요… (약 ${mb}MB)</div>`
     : `<div class="toolbar"><button class="btn" data-act="rvAudio">음원 불러오기 · 약 ${mb}MB</button><span class="note">불러오면 이 화면에서 문항 묶음마다 다시 들을 수 있어요.</span></div>
        ${mine && LCR.err ? `<div class="banner bad">${esc(LCR.err)}</div>` : ''}`;
-  const body = lcReviewItems(V, (mi, it) => {
-    const clip = mi + ':' + it.clip, s = mine && LCR.clips && LCR.clips[clip] ? rvState(clip) : null;
-    return s ? `<div class="rvplay" data-clip="${esc(clip)}"><button class="btn small" data-act="rvPlay" data-clip="${esc(clip)}">${s.label}</button>
-        <input type="range" min="0" max="${s.max}" step="1" value="${s.value}" data-rvseek="${esc(clip)}" aria-label="${esc(it.heading)} 재생 위치" aria-valuetext="${s.text}"><span class="t num">${s.text}</span></div>` : '';
-  });
+  const body = lcReviewItems(V, (mi, it) => (mine ? rvPlayer(mi + ':' + it.clip, it.heading) : ''));
   return body ? bar + body : '';
 }
 
