@@ -180,8 +180,8 @@ function viewHomework() {
   const lc = S.hwKind === 'lc', list = S.results.filter(a => inFilter(a) && !a.practice && (lc ? !!a.lc : !a.lc)), st = students(list);
   const colOf = a => (lc ? a.lc.id : String(a.testId));
   const cols = new Map();
-  if (lc) (S.lc || []).filter(t => isOpen(t.no, t.set === 'new' ? 'lcNew' : 'lcTpo')).forEach(t => cols.set(t.id, t.title));
-  else (S.tests || []).filter(t => isOpen(t.id)).forEach(t => cols.set(String(t.id), `TEST ${t.id}`));
+  if (lc) (S.lc || []).filter(t => { const k = t.set === 'new' ? 'lcNew' : 'lcTpo'; return isOpen(t.no, k) || extraHas(k, t.no, S.cls); }).forEach(t => cols.set(t.id, t.title));
+  else (S.tests || []).filter(t => isOpen(t.id) || extraHas('open', t.id, S.cls)).forEach(t => cols.set(String(t.id), `TEST ${t.id}`));
   list.forEach(a => { if (!cols.has(colOf(a))) cols.set(colOf(a), lc ? a.lc.title : `TEST ${a.testId}`); });
   const order = k => (lc ? [k.startsWith('new') ? 0 : 1, +k.split('-')[1] || 0] : [0, +k || 0]);
   const keys = [...cols.keys()].sort((a, b) => order(a)[0] - order(b)[0] || order(a)[1] - order(b)[1]);
@@ -292,6 +292,7 @@ function viewSettings() {
       <p class="hint">리스닝도 회차 번호로 적어요 (NEW TOEFL 3은 TEST 번호, TPO는 TPO TEST 번호). 비워 두면 그 세트는 아무 회차도 열리지 않아요.</p>
       <label class="check"><input type="checkbox" id="showAnswers" ${s.showAnswers ? 'checked' : ''}> 학생 결과 화면에 정답 보여 주기</label>
       <p class="hint">끄면 학생은 맞고 틀림만 보고, 정답은 볼 수 없어요.</p>
+      ${viewExtraOpen()}
       <div><button class="btn primary" type="submit"${S.busy.settings ? ' disabled' : ''}>${S.busy.settings ? '저장 중…' : '저장'}</button></div>
     </form>
     <form class="sheet form" id="pwForm"><h2>관리자 비밀번호 바꾸기</h2>
@@ -309,7 +310,7 @@ function viewTests() {
       <input type="file" id="file" accept=".json,application/json" onchange="pickFile(this)">${S.file ? `<span class="hint">고른 파일: <b>${esc(S.file.name)}</b></span>` : ''}
       <div><button class="btn primary" data-act="upload"${S.busy.upload ? ' disabled' : ''}>${S.busy.upload ? '올리는 중…' : '올리기'}</button></div></div>
     <div class="tablebox">${!list ? `<div class="empty">${S.busy.tests ? '불러오는 중…' : '목록을 불러오지 못했어요.'}</div>` : list.length ? `<table><thead><tr><th>회차</th><th>Module 1</th><th>Module 2</th><th>열림</th><th></th></tr></thead><tbody>
-      ${list.map(t => `<tr><td class="num"><b>TEST ${t.id}</b></td>${t.modules.map(m => `<td>${m.minutes}분 · 단어 ${m.words} · 리딩 ${m.read}</td>`).join('')}<td>${isOpen(t.id) ? '<span class="mark ok">열림</span>' : '<span class="note">닫힘</span>'}</td>
+      ${list.map(t => `<tr><td class="num"><b>TEST ${t.id}</b></td>${t.modules.map(m => `<td>${m.minutes}분 · 단어 ${m.words} · 리딩 ${m.read}</td>`).join('')}<td>${isOpen(t.id) ? '<span class="mark ok">열림</span>' : extraHas('open', t.id) ? '<span class="mark">일부</span>' : '<span class="note">닫힘</span>'}</td>
         <td><button class="btn small danger" data-act="delTestAsk" data-id="${t.id}">삭제</button></td></tr>`).join('')}
       </tbody></table>` : `<div class="empty">아직 올라온 회차가 없어요. 위에서 tests.json을 올려 주세요.</div>`}</div>
     ${viewLcTests()}</div>`;
@@ -325,7 +326,7 @@ function viewLcTests() {
   const exN = id => (S.lcEx || {})[id];
   const rows = set => (list || []).filter(t => t.set === set).map(t => `<tr><td class="num"><b>${esc(t.title)}</b></td>${t.modules.map(m => `<td>${m.count}문제</td>`).join('')}
     <td>${exN(t.id) ? `${exN(t.id)}개` : '<span class="note">없음</span>'}</td>
-    <td>${isOpen(t.no, set === 'new' ? 'lcNew' : 'lcTpo') ? '<span class="mark ok">열림</span>' : '<span class="note">닫힘</span>'}</td>
+    <td>${isOpen(t.no, set === 'new' ? 'lcNew' : 'lcTpo') ? '<span class="mark ok">열림</span>' : extraHas(set === 'new' ? 'lcNew' : 'lcTpo', t.no) ? '<span class="mark">일부</span>' : '<span class="note">닫힘</span>'}</td>
     <td><button class="btn small danger" data-act="delLcAsk" data-id="${esc(t.id)}">삭제</button></td></tr>`).join('');
   const table = set => `<table><thead><tr><th>회차</th><th>Module 1</th><th>Module 2</th><th>해설</th><th>열림</th><th></th></tr></thead><tbody>${rows(set)}</tbody></table>`;
   return `<div class="sheet form"><h2>리스닝 회차</h2>${audio}
@@ -401,8 +402,28 @@ window.addEventListener('beforeunload', e => { if (S.au && S.au.running) { e.pre
 // 리딩은 칸이 비어 있으면 전부 열림, 리스닝(lcNew·lcTpo)은 칸이 비어 있으면 전부 닫힘 (서버와 같은 규칙)
 function isOpen(id, key) {
   const s = (S.settings && S.settings[key || 'open'] || '').trim(); if (!s) return !(key === 'lcNew' || key === 'lcTpo');
-  return s.split(/[,\s]+/).filter(Boolean).some(p => { const m = p.match(/^(\d+)\s*[-~]\s*(\d+)$/); return m ? id >= +m[1] && id <= +m[2] : +p === id; });
+  return inList(s, id);
 }
+const inList = (s, id) => String(s || '').split(/[,\s]+/).filter(Boolean).some(p => { const m = p.match(/^(\d+)\s*[-~]\s*(\d+)$/); return m ? id >= +m[1] && id <= +m[2] : +p === id; });
+// 반·학생별로 더 연 회차 (S.settings.extra). cls를 주면 그 반 전체에 연 줄만 본다
+const extraHas = (key, id, cls) => ((S.settings && S.settings.extra) || []).some(x => (cls == null || (x.cls === cls && !x.name)) && inList(x[key], id));
+// 설정 탭: 반·학생별로 더 열기. 고치는 동안 줄들은 S.xRules에 두고(화면을 다시 그려도 남게), 저장할 때 함께 보낸다.
+function viewExtraOpen() {
+  if (!S.xRules) S.xRules = ((S.settings && S.settings.extra) || []).map(x => Object.assign({}, x));
+  const R = S.results || [], uniq = f => [...new Set(R.map(f).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
+  const cell = (x, f, ph, list) => `<td><input type="text" data-f="${f}" value="${esc(x[f] || '')}" placeholder="${ph}"${list ? ` list="${list}"` : ''} aria-label="${ph}"></td>`;
+  return `<h3 style="margin:8px 0 0">반·학생별로 더 열기</h3>
+    <p class="hint">위 회차는 모든 학생에게 열려요. 아래 줄에 적은 회차는 그 반(이름을 비우면 반 전체)이나 그 학생에게만 더 열려요. 반과 이름은 학생이 입장할 때 고른 반·이름과 같아야 해요.</p>
+    <div class="tablebox"><table class="xopen"><thead><tr><th>반</th><th>이름</th><th>리딩</th><th>리스닝 NEW TOEFL 3</th><th>리스닝 TPO</th><th></th></tr></thead><tbody>
+      ${S.xRules.map((x, i) => `<tr class="xrow">${cell(x, 'cls', '반', 'clsList')}${cell(x, 'name', '비우면 반 전체', 'nameList')}${cell(x, 'open', '예: 7, 9-10')}${cell(x, 'lcNew', '예: 6')}${cell(x, 'lcTpo', '예: 12')}
+        <td><button type="button" class="btn small danger" data-act="xDel" data-i="${i}">삭제</button></td></tr>`).join('') || '<tr><td colspan="6" class="note">아직 없어요.</td></tr>'}
+    </tbody></table></div>
+    <datalist id="clsList">${uniq(a => a.cls).map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+    <datalist id="nameList">${uniq(a => a.name.trim()).map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+    <div><button type="button" class="btn small" data-act="xAdd">줄 추가</button></div>`;
+}
+// 화면의 입력값을 S.xRules에 옮긴다 (줄을 더하거나 지우거나 저장하기 전에)
+function syncX() { S.xRules = [...document.querySelectorAll('tr.xrow')].map(tr => Object.fromEntries([...tr.querySelectorAll('input[data-f]')].map(el => [el.dataset.f, el.value.trim()]))); }
 function viewConfirm() {
   const c = S.confirm; if (!c) return '';
   return `<div class="modal" role="dialog" aria-modal="true"><div class="box"><h3>${esc(c.title)}</h3><p class="note" style="margin:0">${esc(c.text)}</p>
@@ -424,11 +445,12 @@ document.addEventListener('submit', ev => {
   const f = ev.target;
   if (f.id === 'login') login(f.querySelector('#pw').value.trim());
   else if (f.id === 'sf') { S.q = f.querySelector('#q').value.trim(); S.open = S.sel = null; render(); }
-  else if (f.id === 'settingsForm') run('settings', async () => {
+  // run()이 '저장 중'으로 화면을 다시 그리기 전에 줄 입력값을 옮겨 둔다 (다른 칸은 떨어져 나간 옛 form에서 읽는다)
+  else if (f.id === 'settingsForm') { syncX(); run('settings', async () => {
     const j = await call('saveSettings', { settings: { code: f.querySelector('#code').value, open: f.querySelector('#open').value, showAnswers: f.querySelector('#showAnswers').checked,
-      lcNew: f.querySelector('#lcNew').value, lcTpo: f.querySelector('#lcTpo').value } });
-    S.settings = j.settings; flash('ok', '저장했어요.');
-  });
+      lcNew: f.querySelector('#lcNew').value, lcTpo: f.querySelector('#lcTpo').value, extra: S.xRules } });
+    S.settings = j.settings; S.xRules = null; flash('ok', '저장했어요.');
+  }); }
   else if (f.id === 'pwForm') {
     const a = f.querySelector('#newPw').value, b = f.querySelector('#newPw2').value;
     if (a !== b) return flash('bad', '두 비밀번호가 서로 달라요.');
@@ -464,6 +486,8 @@ document.addEventListener('click', ev => {
   else if (act === 'sel') { S.sel = S.sel === b.dataset.id ? null : b.dataset.id; render(); if (S.sel && S.rvMode === 'screen') loadRecord(S.sel); }
   else if (act === 'rvMode') { S.rvMode = b.dataset.k; render(); if (S.rvMode === 'screen') loadRecord(S.sel); }
   else if (act === 'rvRetry') loadRecord(b.dataset.id);
+  else if (act === 'xAdd') { syncX(); S.xRules.push({ cls: S.cls || '' }); render(); }
+  else if (act === 'xDel') { syncX(); S.xRules.splice(+b.dataset.i, 1); render(); }
   else if (act === 'delAsk') { const a = S.results.find(x => x.id === b.dataset.id);
     S.confirm = { title: '기록을 지울까요?', text: `${a.name} · ${testLabel(a)} ${modLabel(a)} · ${a.score}/${a.total} 기록이 시트에서도 지워져요. 되돌릴 수 없어요.`, label: '지우기', fn: () => run('del', async () => { await call('deleteResult', { id: a.id }); S.results = S.results.filter(x => x.id !== a.id); if (S.sel === a.id) S.sel = null; flash('ok', '지웠어요.'); }) }; render(); }
   else if (act === 'delTestAsk') { const id = +b.dataset.id;

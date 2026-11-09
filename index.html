@@ -23,6 +23,8 @@ const lsGet = k => { try { return JSON.parse(localStorage.getItem(LS + k)); } ca
 const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(LS + k) : localStorage.setItem(LS + k, JSON.stringify(v)); } catch (e) {} };
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const LET = ['A', 'B', 'C', 'D'];
+// 서버에 보내는 학생 정보: 입장 코드와 반·이름 (반·학생별로 연 회차를 서버가 이것으로 찾는다)
+const me = () => ({ code: S.code.trim(), name: S.name.trim(), cls: S.cls.trim() });
 const PART_LABEL = { '0w': 'M1 Complete the Words', '0r': 'M1 Reading', '1w': 'M2 Complete the Words', '1r': 'M2 Reading', w: 'Complete the Words' };
 
 // S.pick: { test(정답 없음), showAnswers } — 회차를 고른 뒤 모듈과 제한 시간을 고르는 화면
@@ -85,7 +87,7 @@ async function enter() {
   if (!S.code.trim()) { S.err = '입장 코드를 입력해 주세요.'; render(); return; }
   S.busy = 'enter'; render();
   try {
-    const j = await api('enter', { code: S.code.trim() });
+    const j = await api('enter', me());
     S.tests = j.tests; S.lcTests = j.lcTests || []; S.entered = true;
     S.name = S.name.trim().replace(/\s+/g, ' ');
     lsSet(':name', S.name); lsSet(':code', S.code.trim()); lsSet(':period', S.period); lsSet(':cls', S.cls.trim());
@@ -99,7 +101,7 @@ async function loadMine() {
   const me = S.mine = { status: 'loading', list: null, added: (S.mine && S.mine.added) || [], more: false };
   const shows = () => ['home', 'pick', 'lcpick'].includes(S.screen);
   try {
-    const j = await api('myResults', { code: S.code.trim(), name: S.name.trim(), cls: S.cls.trim() });
+    const j = await api('myResults', me());
     if (S.mine !== me) return;  // 그사이 반·이름을 바꿨다
     const ids = new Set(j.results.map(a => a.id));
     me.list = me.added.filter(a => !ids.has(a.id)).concat(j.results.map(a => Object.assign(a, { mod: a.practice ? 'w' : a.module })));
@@ -125,7 +127,7 @@ function bestText(xs, extra) {
 async function startTest(id) {
   S.busy = 'start' + id; S.err = ''; render();
   try {
-    const j = await api('getTest', { code: S.code.trim(), id });
+    const j = await api('getTest', Object.assign(me(), { id }));
     S.pick = { test: j.test, showAnswers: j.showAnswers };
     S.screen = 'pick'; S.busy = ''; render(); window.scrollTo(0, 0);
   } catch (e) { S.err = e.message; S.busy = ''; render(); }
@@ -141,7 +143,7 @@ async function startWords() {
   const { from, to } = wordsRange(), limit = Math.max(0, Math.min(300, Number(WR.lim) || 0));
   S.busy = 'words'; S.err = ''; render();
   try {
-    const j = await api('getWords', { code: S.code.trim(), from, to });
+    const j = await api('getWords', Object.assign(me(), { from, to }));
     const sets = j.sets.map(s => ({ type: 'words', start: s.start, text: s.text, t: s.t, mi: s.mi, kp: s.t + '-' + s.mi }));
     S.exam = { kind: 'words', from, to, test: { id: span({ from, to }), modules: [{ name: '빈칸 모음', sets }] },
       mod: 0, set: 0, answers: {}, startedAt: Date.now(), limit, endsAt: limit > 0 ? Date.now() + limit * 60000 : null, used: [] };
@@ -399,7 +401,7 @@ async function openReview(id, back) {
   const me = S.review = { id, back, status: 'loading', onlyWrong: false };
   S.screen = 'review'; render(); window.scrollTo(0, 0);
   try {
-    const j = await api('myResult', { code: S.code.trim(), name: S.name.trim(), cls: S.cls.trim(), id });
+    const j = await api('myResult', Object.assign(me(), { id }));
     if (S.review !== me) return;
     Object.assign(me, { status: 'ok', r: j.result, showAnswers: j.showAnswers, content: j.content });
   } catch (e) { if (S.review !== me) return; me.status = 'err'; me.err = e.message; }

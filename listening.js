@@ -58,7 +58,7 @@ const lcMB = n => (n / 1048576).toFixed(1);
 async function startLc(id) {
   S.busy = 'lc' + id; S.err = ''; render();
   try {
-    const j = await api('getListening', { code: S.code.trim(), id });
+    const j = await api('getListening', Object.assign(me(), { id }));
     S.lcPick = { test: j.test, showAnswers: j.showAnswers }; S.lcSecs = { id: j.test.id };
     S.screen = 'lcpick'; S.busy = ''; render(); window.scrollTo(0, 0);
   } catch (e) { S.err = e.message; S.busy = ''; render(); }
@@ -144,7 +144,7 @@ async function lcLoad() {
     for (const mi of mods) {
       if (!live()) break;
       let res;
-      try { res = await fetch(window.API_URL, { method: 'POST', body: JSON.stringify({ action: 'getAudio', code: S.code.trim(), id: e.test.id, module: mi }), signal: ctl ? ctl.signal : undefined }); }
+      try { res = await fetch(window.API_URL, { method: 'POST', body: JSON.stringify(Object.assign({ action: 'getAudio' }, me(), { id: e.test.id, module: mi })), signal: ctl ? ctl.signal : undefined }); }
       catch (x) { throw new Error(ctl && ctl.signal.aborted ? SLOW : '서버에 연결할 수 없어요. 인터넷 연결을 확인해 주세요.'); }
       let text;
       try {
@@ -422,7 +422,7 @@ async function rvAudioLoad() {
   const clips = {}, drop = () => Object.values(clips).forEach(u => URL.revokeObjectURL(u));
   try {
     for (const mi of mods) {
-      const j = await api('getAudio', { code: S.code.trim(), id, module: mi });
+      const j = await api('getAudio', Object.assign(me(), { id, module: mi }));
       Object.entries(j.pack.clips).forEach(([k, b64]) => { clips[mi + ':' + k] = URL.createObjectURL(new Blob([b64bytes(b64)], { type: 'audio/mpeg' })); });
       if (LCR.tok !== tok) break;
     }

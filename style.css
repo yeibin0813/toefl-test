@@ -102,6 +102,9 @@ tr.inside > td { background: var(--bg); padding: 10px; }
 tr.inside .tablebox { border-radius: 10px; }
 .hwc { display: flex; gap: 4px; align-items: center; white-space: nowrap; line-height: 1.8; }
 table.hw th { white-space: nowrap; }
+#settingsForm { max-width: 920px; }
+table.xopen input { width: 100%; min-width: 110px; padding: 6px 8px; }
+table.xopen .btn { white-space: nowrap; }
 
 /* exam */
 .qhead { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
