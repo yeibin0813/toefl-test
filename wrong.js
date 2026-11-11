@@ -112,7 +112,9 @@ function wWords(g, where) {
     const fix = !x.ok && x.correct ? `<span class="rvb fix">${esc(x.correct)}</span>` : '';
     return `<span class="wd">${pre}<span class="rvb ${x.ok ? 'ok' : 'bad'}">${esc(given)}</span>${fix}<span class="sr"> (${n}번 ${x.ok ? '맞음' : '틀림'}${fix ? ', 정답 ' + esc(x.correct) : ''})</span></span>`;
   });
-  return `<div class="sheet words rvwords"><div class="eyebrow">${where} · 틀렸던 칸 ${g.ns.length}개 (가장 많이 ${wWorst(g)}번)</div>${html}</div>`;
+  const ex = g.ns.map(n => ({ n, x: W.res[wKey(g, n)] })).filter(o => o.x && o.x.ex && o.x.ex.exp);
+  return `<div class="sheet words rvwords"><div class="eyebrow">${where} · 틀렸던 칸 ${g.ns.length}개 (가장 많이 ${wWorst(g)}번)</div>${html}</div>
+    ${ex.length ? `<div class="rvx"><b>해설</b><ul class="rvwx">${ex.map(o => `<li><span class="num">${o.n}.</span> ${esc(o.x.ex.exp)}</li>`).join('')}</ul></div>` : ''}`;
 }
 
 document.addEventListener('click', ev => {

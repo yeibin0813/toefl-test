@@ -309,11 +309,11 @@ function viewTests() {
   const list = S.tests;
   return `<div class="stack">
     <div class="sheet form"><h2>회차 올리기</h2>
-      <p class="hint">tests.json 파일을 고르면 그 안의 회차가 추가돼요. 이미 있는 회차 번호는 새 내용으로 바뀌어요.</p>
+      <p class="hint">tests.json 파일을 고르면 그 안의 회차가 추가돼요. 이미 있는 회차 번호는 새 내용으로 바뀌어요. 해설이 든 파일(tests_해설.json)을 고르면 해설도 함께 올라가고, 학생은 정답 공개가 켜져 있을 때 다시 보기에서 해설을 볼 수 있어요.</p>
       <input type="file" id="file" accept=".json,application/json" onchange="pickFile(this)">${S.file ? `<span class="hint">고른 파일: <b>${esc(S.file.name)}</b></span>` : ''}
       <div><button class="btn primary" data-act="upload"${S.busy.upload ? ' disabled' : ''}>${S.busy.upload ? '올리는 중…' : '올리기'}</button></div></div>
-    <div class="tablebox">${!list ? `<div class="empty">${S.busy.tests ? '불러오는 중…' : '목록을 불러오지 못했어요.'}</div>` : list.length ? `<table><thead><tr><th>회차</th><th>Module 1</th><th>Module 2</th><th>열림</th><th></th></tr></thead><tbody>
-      ${list.map(t => `<tr><td class="num"><b>TEST ${t.id}</b></td>${t.modules.map(m => `<td>${m.minutes}분 · 단어 ${m.words} · 리딩 ${m.read}</td>`).join('')}<td>${isOpen(t.id) ? '<span class="mark ok">열림</span>' : extraHas('open', t.id) ? '<span class="mark">일부</span>' : '<span class="note">닫힘</span>'}</td>
+    <div class="tablebox">${!list ? `<div class="empty">${S.busy.tests ? '불러오는 중…' : '목록을 불러오지 못했어요.'}</div>` : list.length ? `<table><thead><tr><th>회차</th><th>Module 1</th><th>Module 2</th><th>해설</th><th>열림</th><th></th></tr></thead><tbody>
+      ${list.map(t => `<tr><td class="num"><b>TEST ${t.id}</b></td>${t.modules.map(m => `<td>${m.minutes}분 · 단어 ${m.words} · 리딩 ${m.read}</td>`).join('')}<td class="num">${t.x ? t.x + '개' : '<span class="note">없음</span>'}</td><td>${isOpen(t.id) ? '<span class="mark ok">열림</span>' : extraHas('open', t.id) ? '<span class="mark">일부</span>' : '<span class="note">닫힘</span>'}</td>
         <td><button class="btn small danger" data-act="delTestAsk" data-id="${t.id}">삭제</button></td></tr>`).join('')}
       </tbody></table>` : `<div class="empty">아직 올라온 회차가 없어요. 위에서 tests.json을 올려 주세요.</div>`}</div>
     ${viewLcTests()}${viewWrTests()}</div>`;

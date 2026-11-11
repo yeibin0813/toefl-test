@@ -24,6 +24,16 @@ function wordsReviewBody(V) {
   const by = rowMap(V.r.rows);
   return V.content.sets.map(s => rvWords(s, s.t + '-' + s.mi, by, V, `TEST ${esc(s.t)} · Module ${s.mi + 1}`)).join('');
 }
+// 리딩 해설 (서버가 정답 공개일 때, 푼 문항 것만 답 키로 보낸다)
+const rvX = (V, k) => { const t = V.content && V.content.x && V.content.x[k]; return t ? { exp: t } : null; };
+// 빈칸 해설 목록: 틀린 칸은 펼쳐 두고, 맞힌 칸은 접어 둔다 (틀린 것만 보기면 맞힌 칸은 뺀다)
+function rvWordsX(bl, xs, kp, V) {
+  const all = bl.map((b, j) => ({ b, x: xs[j], t: (rvX(V, kp + '-' + b.n) || {}).exp })).filter(o => o.x && o.t);
+  if (!all.length) return '';
+  const li = o => `<li><span class="num">${o.b.n}.</span> ${esc(o.t)}</li>`, bad = all.filter(o => !o.x.ok), good = V.onlyWrong ? [] : all.filter(o => o.x.ok);
+  if (!bad.length && !good.length) return '';
+  return `<div class="rvx"><b>해설</b>${bad.length ? `<ul class="rvwx">${bad.map(li).join('')}</ul>` : ''}${good.length ? `<details class="rvwx"><summary>맞힌 칸 해설 ${good.length}개</summary><ul class="rvwx">${good.map(li).join('')}</ul></details>` : ''}</div>`;
+}
 // 빈칸 지문 하나: 낸 글자를 채워 넣고, 틀린 칸은 정답(정답 공개일 때)을 옆에 붙인다. kp는 답 키 앞부분 ("0" 또는 "7-0")
 function rvWords(set, kp, by, V, title) {
   const bl = blanksOf(set), xs = bl.map(b => by[kp + '-' + b.n]);
@@ -36,7 +46,7 @@ function rvWords(set, kp, by, V, title) {
     const fix = !x.ok && x.correct ? `<span class="rvb fix">${esc(x.correct)}</span>` : '';
     return `<span class="wd">${pre}<span class="rvb ${x.ok ? 'ok' : x.given ? 'bad' : 'bad none'}">${x.given ? esc(x.given) : gap}</span>${fix}<span class="sr"> (${b.n}번 ${x.ok ? '맞음' : '틀림'}${fix ? ', 정답 ' + esc(x.correct) : ''})</span></span>`;
   });
-  return `<div class="sheet words rvwords">${title ? `<div class="eyebrow">${title}</div>` : ''}${html}</div>`;
+  return `<div class="sheet words rvwords">${title ? `<div class="eyebrow">${title}</div>` : ''}${html}</div>${rvWordsX(bl, xs, kp, V)}`;
 }
 // 리딩 지문 하나와 그 문제들. 문장 넣기 문제가 있으면 지문의 ■ 자리에 A~D를 붙이고, 내가 고른 자리와 정답 자리를 칠한다.
 function rvRead(set, mi, by, V) {
@@ -52,7 +62,7 @@ function rvRead(set, mi, by, V) {
     return `<p>${ins ? h.replace(/■/g, mark) : h.replace(/ ?■ ?/g, ' ').replace(/ {2,}/g, ' ').trim()}</p>`;
   }).join('');
   const cards = qs.map(q => rvChoice(q.n, q.insert ? '다음 문장이 들어갈 가장 알맞은 위치를 고르세요.' : q.q, q.insert ? LET.map(L => `위치 ■ ${L}`) : q.c,
-    by[mi + '-' + q.n], q.insert ? `<div class="insert-sent">${esc(q.insert)}</div>` : '')).join('');
+    by[mi + '-' + q.n], q.insert ? `<div class="insert-sent">${esc(q.insert)}</div>` : '', rvX(V, mi + '-' + q.n))).join('');
   return `<div class="split rvsplit"><div class="sheet passage">${set.kind ? `<div class="eyebrow">${esc(set.kind)}</div>` : ''}${set.title ? `<h3>${esc(set.title)}</h3>` : ''}${passage}</div>
     <div class="stack">${cards}</div></div>`;
 }

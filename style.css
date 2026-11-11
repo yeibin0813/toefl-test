@@ -255,6 +255,10 @@ label.btn { cursor: pointer; }
 .rvx { border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 8px 8px 0; padding: 10px 14px; font-size: 14px; line-height: 1.65; }
 .rvx b { display: block; font-size: 12px; letter-spacing: .04em; color: var(--accent); margin-bottom: 2px; }
 .rvx p { margin: 0; white-space: pre-line; }
+ul.rvwx { list-style: none; margin: 4px 0 0; padding: 0; }
+ul.rvwx li { margin: 4px 0; }
+details.rvwx { margin-top: 6px; }
+details.rvwx summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .rvx p b { display: inline; font-size: inherit; letter-spacing: 0; color: inherit; margin: 0; }
 .rvx p b.tagl { color: var(--accent); }
 .rvx .rvtype { display: block; font-size: 13px; font-weight: 600; color: var(--ink); margin: 0 0 6px; }
