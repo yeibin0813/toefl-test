@@ -7,9 +7,8 @@ let RV_MINE = '내 답';
 const RV_OPEN = new Set();
 document.addEventListener('toggle', ev => { const d = ev.target; if (d.dataset && d.dataset.sk) RV_OPEN[d.open ? 'add' : 'delete'](d.dataset.sk); }, true);
 
-// 리딩 섹션 (서버 RC_SEC_NAME과 같다): 빈칸, 일상 글(Read in Daily Life), 학술 지문(Read an Academic Passage)
-const RC_SEC = { words: 'Complete the Words', daily: 'Daily Life', academic: 'Academic Passage' }, RC_ORDER = ['words', 'daily', 'academic'];
-const rcSecOf = s => (s.type === 'words' ? 'words' : /academic/i.test(s.kind || '') ? 'academic' : 'daily');
+// 리딩 섹션 이름 (서버 RC_SEC_NAME과 같다). 섹션만 골라 푼 예전 기록의 이름에 쓴다
+const RC_SEC = { words: 'Complete the Words', daily: 'Daily Life', academic: 'Academic Passage' };
 const rcSecNames = secs => (secs || []).map(s => RC_SEC[s] || s).join(' · ');
 // 모아 풀기 (서버 PRAC_NAME과 같다). practice.sec이 없으면 빈칸
 const PRAC_NAME = { words: '빈칸', daily: 'Daily Life', academic: 'Academic' };
