@@ -251,6 +251,7 @@ const API = {
           if (p[0] === 'w' && set.type === 'words') { const b = blanks_(set).find(x => x.n === n); if (b) res = { ok: blankOk_(b, given), correct: b.ans, full: b.full }; }
           if (p[0] === 'r' && set.type !== 'words') { const q = set.questions.find(x => x.n === n); if (q) res = { ok: given === q.a, correct: q.a }; }
         });
+        if (res && t.x && t.x[mi + '-' + n]) res.ex = { exp: t.x[mi + '-' + n] };
       } else if (p[0] === 'l') {
         const t = p[1] in lc ? lc[p[1]] : (lc[p[1]] = loadLc_(p[1])); if (!t || !lcOpen_(open, t) || !t.modules[mi]) return;
         t.modules[mi].items.forEach(it => it.questions.forEach(q => { if (q.n === n) res = { ok: given === q.a, correct: q.a }; }));
@@ -522,6 +523,12 @@ function testsById_(ids) {
 }
 function validateTest_(t) {
   if (!t || !t.id || !Array.isArray(t.modules) || !t.modules.length) throw new Error('회차 형식이 잘못됐어요 (id, modules 필요).');
+  // 해설(선택): { "모듈-번호": 글 }. 글자가 아닌 값은 버린다
+  if (t.x != null) {
+    if (typeof t.x !== 'object' || Array.isArray(t.x)) throw new Error('TEST ' + t.id + ': 해설(x) 형식이 잘못됐어요.');
+    const x = {}; Object.keys(t.x).forEach(k => { if (/^\d+-\d+$/.test(k) && typeof t.x[k] === 'string' && t.x[k].trim()) x[k] = t.x[k].slice(0, 2000); });
+    t.x = x;
+  }
   t.modules.forEach(m => (m.sets || []).forEach(s => {
     if (s.type === 'words') { if (!blanks_(s).length) throw new Error('TEST ' + t.id + ': 빈칸이 없는 단어 지문이 있어요.'); }
     else if (s.type === 'read') (s.questions || []).forEach(q => { if (!LET.includes(q.a)) throw new Error('TEST ' + t.id + ' ' + q.n + '번: 정답이 A~D가 아니에요.'); });
@@ -542,7 +549,7 @@ function countOf_(t) {
   return c.words + c.read;
 }
 function testSummary_(t) {
-  return { id: t.id, modules: t.modules.map(m => ({ name: m.name, minutes: m.minutes,
+  return { id: t.id, x: t.x ? Object.keys(t.x).length : 0, modules: t.modules.map(m => ({ name: m.name, minutes: m.minutes,
     words: m.sets.filter(s => s.type === 'words').reduce((n, s) => n + blanks_(s).length, 0),
     read: m.sets.filter(s => s.type === 'read').reduce((n, s) => n + s.questions.length, 0) })) };
 }
@@ -707,15 +714,21 @@ function findRecord_(id) {
   Object.assign(rec, { id, name: String(row[1]).trim(), finishedAt: time_(row[0]), used: Array.isArray(d.used) ? d.used : [], limit: Number(d.limit) || 0 });
   return { row, d, rec };
 }
+// 리딩 해설: 이 기록에서 푼 문항·빈칸 것만 { 답 키: 해설 } (안 푼 문항의 정답이 해설로 새지 않게). 빈칸 모아 풀기 줄은 x.t에 회차가 있다
+function rcXFor_(tests, rows, testId) {
+  const out = {};
+  rows.forEach(r => { const t = tests[r.t != null ? r.t : testId], v = t && t.x && t.x[r.mi + '-' + r.n]; if (v) out[r.k] = v; });
+  return Object.keys(out).length ? out : null;
+}
 // 다시 보기에 보낼 문제 (정답은 뺀다). 빈칸 모아 풀기는 rows에 있는 빈칸 지문만.
-// 리스닝 해설은 관리자(open 없음)에게는 늘, 학생에게는 정답 공개일 때만 보낸다.
+// 리딩·리스닝 해설은 관리자(open 없음)에게는 늘, 학생에게는 정답 공개일 때만 보낸다.
 function reviewContent_(rec, rows, open) {
   if (rec.practice) {
     const tests = testsById_(rows.map(x => x.t)), sets = [], has = new Set(rows.map(x => x.k));
     Object.keys(tests).map(Number).sort((a, b) => a - b).forEach(tid => tests[tid].modules.forEach((m, mi) => m.sets.forEach(s => {
       if (s.type === 'words' && blanks_(s).some(b => has.has(tid + '-' + mi + '-' + b.n))) sets.push({ t: tid, mi, start: s.start, text: wordsText_(s) });
     })));
-    return sets.length ? { sets } : null;
+    return sets.length ? { sets, x: !open || open.showAnswers ? rcXFor_(tests, rows) : null } : null;
   }
   if (rec.wr) {
     const t = loadWr_(rec.wr.id);
@@ -726,8 +739,8 @@ function reviewContent_(rec, rows, open) {
     return t ? { test: stripLc_(t), extra: !open || open.showAnswers ? lcExtraFor_(t, rows) : null } : null;
   }
   if (rec.testId != null) {
-    const t = testsById_([rec.testId])[rec.testId];
-    return t ? { test: stripAnswers_(t) } : null;
+    const tests = testsById_([rec.testId]), t = tests[rec.testId];
+    return t ? { test: stripAnswers_(t), x: !open || open.showAnswers ? rcXFor_(tests, rows, rec.testId) : null } : null;
   }
   return null;
 }
