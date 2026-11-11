@@ -149,7 +149,31 @@ button.ins.on { background: var(--accent); color: var(--accent-ink); }
 .dot.done { background: var(--accent-soft); border-color: var(--accent); }
 .dot.cur { outline: 2px solid var(--accent); outline-offset: 1px; }
 .exam-on .passage, .exam-on .words, .exam-on .qs { user-select: none; -webkit-user-select: none; }
-.exam-on input.blank, .review-on input.blank { user-select: text; -webkit-user-select: text; }
+.exam-on input.blank, .review-on input.blank , .exam-on textarea { user-select: text; -webkit-user-select: text; }
+/* 라이팅 */
+.wrctx { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 10px; align-items: start; }
+.wrctx .who { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; background: var(--accent-soft); color: var(--accent); }
+.wrctx.me .who { background: var(--ok-soft); color: var(--ok); }
+.wrctx p { margin: 4px 0 0; font-family: var(--font-read); font-size: 18px; line-height: 2; }
+.wrfix { font-weight: 600; }
+.wrslot { display: inline-block; min-width: 72px; padding: 2px 10px; border: 1.5px solid var(--accent); border-radius: 8px; background: var(--accent-soft); color: var(--ink); font: inherit; line-height: 1.5; vertical-align: baseline; }
+.wrslot.empty { border-style: dashed; border-color: var(--line); background: transparent; }
+.wrbank { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.wrchip { font: inherit; font-size: 16px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--ink); cursor: pointer; }
+.wrchip:hover:not(:disabled) { border-color: var(--accent); }
+.wrchip:disabled { opacity: .3; cursor: default; }
+.wrq { margin: 0; white-space: pre-line; line-height: 1.7; }
+.wrpost { border-left: 3px solid var(--line); padding: 4px 12px; }
+.wrpost.prof { border-left-color: var(--accent); }
+.wrpost p { margin: 4px 0 0; white-space: pre-line; line-height: 1.7; }
+textarea.wrtext { width: 100%; font-family: var(--font-read); font-size: 16px; line-height: 1.7; }
+.wrsent { display: flex; gap: 8px; align-items: baseline; font-family: var(--font-read); font-size: 17px; }
+.wrsent .tag { font-family: var(--font-ui); font-size: 12px; font-weight: 600; white-space: nowrap; padding: 0 8px; border-radius: 999px; border: 1px solid currentColor; color: var(--accent); }
+.wrsent .tag.ok { color: var(--ok); }
+.wrbox { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--paper); }
+.wrbox.model { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); background: var(--ok-soft); }
+.wrbox p { margin: 6px 0 0; white-space: pre-line; font-family: var(--font-read); font-size: 16px; line-height: 1.7; }
+
 
 /* listening */
 .lcintro { max-width: 640px; }

@@ -119,3 +119,24 @@ function lcReviewItems(V, player) {
     return items && mods.length > 1 ? `<h3 class="rvmod">${esc(t.modules[mi].name)}</h3>${items}` : items;
   }).join('');
 }
+// 라이팅 문제 글: 이메일(상황·지시)과 토론(질문·교수·학생 글)
+const wrEmail = m => `<p class="wrq">${esc(m.situation)}</p><p class="wrq">${esc(m.task)}</p>`;
+const wrDisc = d => `<p class="wrq">${esc(d.question)}</p><div class="wrpost prof"><b>${esc(d.prof.name)}</b><p>${esc(d.prof.text)}</p></div>
+  ${d.students.map(s => `<div class="wrpost"><b>${esc(s.name)}</b><p>${esc(s.text)}</p></div>`).join('')}`;
+// 라이팅 다시 보기: 재배열은 앞 문장·만든 문장·정답(정답 공개일 때), 이메일·토론은 문제·쓴 글·모범 답안(정답 공개일 때)
+function wrReviewBody(V) {
+  const by = rowMap(V.r.rows), w = V.content.wr, es = V.content.essays || {}, mine = RV_MINE === '내 답' ? '내 글' : '학생 글';
+  const build = w.build.map(b => {
+    const x = by['0-' + b.n]; if (!x) return ''; V.seen.add(x.k);
+    if (V.onlyWrong && x.ok) return '';
+    return `<div class="sheet rvq${x.ok ? '' : ' wrong'}"><div class="rvqh"><span class="mark ${x.ok ? 'ok' : 'bad'}">${x.ok ? 'O' : 'X'}<span class="sr">${x.ok ? ' 맞음' : ' 틀림'}</span></span>
+      <span><span class="num">${b.n}.</span> ${esc(b.ctx)}</span></div>
+      <div class="wrsent"><span class="tag">${RV_MINE}</span>${x.given ? esc(x.given) : '<span class="note">문장을 만들지 않았어요.</span>'}</div>
+      ${x.correct && !x.ok ? `<div class="wrsent ok"><span class="tag ok">정답</span>${esc(x.correct)}</div>` : ''}</div>`;
+  }).join('');
+  const essay = (title, prompt, text, model) => `<section class="stack"><h3 class="rvmod">${title}</h3><div class="sheet stack">${prompt}</div>
+    <div class="wrbox"><div class="eyebrow">${mine} · ${(String(text || '').trim().match(/\S+/g) || []).length}단어</div><p>${text ? esc(text) : '<span class="note">쓰지 않았어요.</span>'}</p></div>
+    ${model ? `<div class="wrbox model"><div class="eyebrow">모범 답안</div><p>${esc(model)}</p></div>` : ''}</section>`;
+  return `<section class="stack"><h3 class="rvmod">재배열</h3>${build || '<div class="tablebox"><div class="empty">틀린 문항이 없어요.</div></div>'}</section>`
+    + essay('이메일', wrEmail(w.email), es.email, w.email.model) + essay('토론', wrDisc(w.disc), es.disc, w.disc.model);
+}
