@@ -14,6 +14,9 @@ const LC_TYPE_NAME = { response: 'Best Response', conversation: 'Conversation', 
 // 리딩 섹션: 빈칸(Complete the Words), 일상 글(Read in Daily Life), 학술 지문(Read an Academic Passage). 학생 페이지 review.js의 RC_SEC와 같다
 const RC_SEC_NAME = { words: 'Complete the Words', daily: 'Daily Life', academic: 'Academic Passage' };
 const rcSecOf_ = set => (set.type === 'words' ? 'words' : /academic/i.test(set.kind || '') ? 'academic' : 'daily');
+// 모아 풀기 섹션과 기록 이름 ("빈칸 TEST 1-10", "Daily Life TEST 1-10", "Academic TEST 1-10"). sec가 없으면 빈칸이다 (예전 기록)
+const PRAC_NAME = { words: '빈칸', daily: 'Daily Life', academic: 'Academic' };
+const pracSec_ = v => (v === 'daily' || v === 'academic' ? v : 'words');
 const DEFAULT_PW = 'toefl1234';
 const RESULT_HEADERS = ['제출 시각', '이름', '회차', '총점', '만점', 'M1 단어', 'M1 리딩', 'M2 단어', 'M2 리딩',
   '소요 시간 (M1 + M2)', '틀린 문항', '틀린 답 → 정답', '상세 (JSON)', '기록 ID', '기간', '반'];
@@ -69,24 +72,31 @@ const API = {
     // 닫힌 회차도 기록은 남기지만 정답은 돌려주지 않는다 (나중에 열릴 회차의 정답이 새지 않게)
     return saveResult_(rec, r.attempt, rcOpen_(openNow_(r), t.id));
   },
-  // 빈칸 모아 풀기: from~to 회차 중 열린 회차의 빈칸 지문만 보낸다 (글자 수만).
+  // 모아 풀기: from~to 회차 중 열린 회차에서 한 섹션(sec: 빈칸 words, Daily Life daily, Academic academic) 지문만 보낸다.
+  // 빈칸은 글자 수만, 리딩은 정답을 뺀 문제. 답 키는 "회차-모듈-번호"
   getWords(r) {
     checkCode_(r.code);
-    const sets = wordsSets_(r.from, r.to, openNow_(r));
-    return { sets: sets.map(s => ({ t: s.t, mi: s.mi, start: s.start, text: wordsText_(s) })) };
+    const sec = pracSec_(r.sec), sets = pracSets_(r.from, r.to, openNow_(r), sec);
+    return { sets: sets.map(s => (s.type === 'words' ? { type: 'words', t: s.t, mi: s.mi, start: s.start, text: wordsText_(s) } : pracRead_(s))) };
   },
   submitWords(r) {
     checkCode_(r.code);
-    const sets = wordsSets_(r.from, r.to, openNow_(r)), answers = r.answers || {}, rows = [];
-    sets.forEach(s => blanks_(s).forEach(b => {
-      const k = s.t + '-' + s.mi + '-' + b.n;
-      rows.push({ k, t: s.t, mi: s.mi, n: b.n, kind: 'w', given: String(answers[k] || ''), correct: b.ans, full: b.full, ok: blankOk_(b, answers[k]) });
-    }));
-    const score = rows.filter(x => x.ok).length;
+    const sec = pracSec_(r.sec), sets = pracSets_(r.from, r.to, openNow_(r), sec), answers = r.answers || {}, rows = [];
+    sets.forEach(s => {
+      if (s.type === 'words') blanks_(s).forEach(b => {
+        const k = s.t + '-' + s.mi + '-' + b.n;
+        rows.push({ k, t: s.t, mi: s.mi, n: b.n, kind: 'w', given: String(answers[k] || ''), correct: b.ans, full: b.full, ok: blankOk_(b, answers[k]) });
+      });
+      else s.questions.forEach(q => {
+        const k = s.t + '-' + s.mi + '-' + q.n, given = String(answers[k] || '');
+        rows.push({ k, t: s.t, mi: s.mi, n: q.n, kind: 'r', given, correct: q.a, ok: given === q.a });
+      });
+    });
+    const score = rows.filter(x => x.ok).length, practice = Object.assign({ from: Number(r.from), to: Number(r.to) }, sec === 'words' ? {} : { sec });
     const rec = {
       id: newId_(), name: clip_(r.name, 60),
-      period: clip_(r.period, 40), cls: clip_(r.cls, 60), testId: null, practice: { from: Number(r.from), to: Number(r.to) }, module: null, limit: Math.max(0, Number(r.limit) || 0),
-      finishedAt: Date.now(), used: (r.used || []).map(Number), score, total: rows.length, parts: { w: [score, rows.length] }, rows
+      period: clip_(r.period, 40), cls: clip_(r.cls, 60), testId: null, practice, module: null, limit: Math.max(0, Number(r.limit) || 0),
+      finishedAt: Date.now(), used: (r.used || []).map(Number), score, total: rows.length, parts: partsOf_(rows, practice), rows
     };
     return saveResult_(rec, r.attempt, true);
   },
@@ -183,7 +193,7 @@ const API = {
     const content = reviewContent_(rec, rows, open);
     if (!open.showAnswers) rows = rows.map(x => ({ k: x.k, t: x.t, mi: x.mi, n: x.n, kind: x.kind, type: x.type, given: x.given, ok: x.ok }));
     const score = rows.filter(x => x.ok).length;
-    return { result: Object.assign(rec, { score, total: rows.length, parts: rec.wr ? { build: [score, rows.length] } : partsOf_(rows, !!rec.practice), rows, cut }), showAnswers: open.showAnswers, content };
+    return { result: Object.assign(rec, { score, total: rows.length, parts: rec.wr ? { build: [score, rows.length] } : partsOf_(rows, rec.practice), rows, cut }), showAnswers: open.showAnswers, content };
   },
   // 약점 분석: 내 기록(지금 열린 회차만)에서 과목·유형별 정답률(stats)과, 틀렸던 문항의 문제(정답 뺀 것)·틀린 횟수(groups)를 보낸다.
   // 문항 키: 리딩 "r|회차|모듈|번호", 빈칸 "w|회차|모듈|번호", 리스닝 "l|회차 ID|모듈|번호"
@@ -273,7 +283,7 @@ const API = {
     if (!f) throw new Error('기록을 찾을 수 없어요. 새로고침해 주세요.');
     const rows = Array.isArray(f.d.rows) ? f.d.rows : [];
     const score = rows.filter(x => x.ok).length;
-    return { result: Object.assign(f.rec, { score, total: rows.length, parts: f.rec.wr ? { build: [score, rows.length] } : partsOf_(rows, !!f.rec.practice), rows, cut: 0 }),
+    return { result: Object.assign(f.rec, { score, total: rows.length, parts: f.rec.wr ? { build: [score, rows.length] } : partsOf_(rows, f.rec.practice), rows, cut: 0 }),
       showAnswers: true, content: reviewContent_(f.rec, rows, null) };
   },
 
@@ -496,16 +506,18 @@ const rcOpen_ = (open, id) => !open.rc || open.rc.has(Number(id));
 const wrOpen_ = (open, id) => !!open.wr && open.wr.has(Number(id));
 const lcOpen_ = (open, t) => { const s = t.set === 'new' ? open.lcNew : open.lcTpo; return !!s && s.has(Number(t.no)); };
 // from~to 회차 중 열린 회차의 빈칸 지문: [{ t, mi, start, text }]
-function wordsSets_(from, to, open) {
+// 모아 풀기 지문: from~to 회차 중 열린 회차에서 sec 섹션 지문만 (정답 포함, 서버 안에서만 쓴다)
+function pracSets_(from, to, open, sec) {
   from = Number(from); to = Number(to);
   if (!(from >= 1) || !(to >= from)) throw new Error('회차 범위를 다시 골라 주세요.');
-  const out = [];
-  allTests_().filter(t => rcOpen_(open, t.id) && t.id >= from && t.id <= to).forEach(t => t.modules.forEach((m, mi) => m.sets.forEach(s => {
-    if (s.type === 'words') out.push({ t: t.id, mi, start: s.start, text: s.text });
-  })));
-  if (!out.length) throw new Error('그 범위에는 열려 있는 회차가 없어요.');
+  const out = [], tests = allTests_().filter(t => rcOpen_(open, t.id) && t.id >= from && t.id <= to);
+  if (!tests.length) throw new Error('그 범위에는 열려 있는 회차가 없어요.');
+  tests.forEach(t => t.modules.forEach((m, mi) => m.sets.forEach(s => { if (rcSecOf_(s) === sec) out.push(Object.assign({ t: t.id, mi }, s)); })));
+  if (!out.length) throw new Error('그 범위의 열린 회차에는 ' + PRAC_NAME[sec] + ' 지문이 없어요.');
   return out;
 }
+// 학생에게 보낼 리딩 지문 (정답 뺀 문제)
+const pracRead_ = s => ({ type: 'read', t: s.t, mi: s.mi, kind: s.kind, title: s.title, passage: s.passage, questions: s.questions.map(q => ({ n: q.n, q: q.q, c: q.c, insert: q.insert })) });
 
 // ---------- 문제 ----------
 function allTests_() {
@@ -554,8 +566,11 @@ function countOf_(t) {
 function testSummary_(t) {
   return { id: t.id, x: t.x ? Object.keys(t.x).length : 0, modules: t.modules.map(m => ({ name: m.name, minutes: m.minutes,
     words: m.sets.filter(s => s.type === 'words').reduce((n, s) => n + blanks_(s).length, 0),
-    read: m.sets.filter(s => s.type === 'read').reduce((n, s) => n + s.questions.length, 0) })) };
+    read: m.sets.filter(s => s.type === 'read').reduce((n, s) => n + s.questions.length, 0),
+    // 모아 풀기 카드에 보일 섹션별 [지문 수, 문제 수]
+    daily: secCount_(m, 'daily'), academic: secCount_(m, 'academic') })) };
 }
+function secCount_(m, sec) { const ss = m.sets.filter(s => rcSecOf_(s) === sec); return [ss.length, ss.reduce((n, s) => n + s.questions.length, 0)]; }
 // 학생에게 보낼 버전: 빈칸은 글자 수만, 객관식은 정답 제거
 function stripAnswers_(t) {
   return { id: t.id, modules: t.modules.map(m => ({ name: m.name, minutes: m.minutes, sets: m.sets.map(s => {
@@ -723,13 +738,15 @@ function rcXFor_(tests, rows, testId) {
   rows.forEach(r => { const t = tests[r.t != null ? r.t : testId], v = t && t.x && t.x[r.mi + '-' + r.n]; if (v) out[r.k] = v; });
   return Object.keys(out).length ? out : null;
 }
-// 다시 보기에 보낼 문제 (정답은 뺀다). 빈칸 모아 풀기는 rows에 있는 빈칸 지문만.
+// 다시 보기에 보낼 문제 (정답은 뺀다). 모아 풀기는 rows에 있는 지문만 (빈칸·리딩).
 // 리딩·리스닝 해설은 관리자(open 없음)에게는 늘, 학생에게는 정답 공개일 때만 보낸다.
 function reviewContent_(rec, rows, open) {
   if (rec.practice) {
     const tests = testsById_(rows.map(x => x.t)), sets = [], has = new Set(rows.map(x => x.k));
     Object.keys(tests).map(Number).sort((a, b) => a - b).forEach(tid => tests[tid].modules.forEach((m, mi) => m.sets.forEach(s => {
-      if (s.type === 'words' && blanks_(s).some(b => has.has(tid + '-' + mi + '-' + b.n))) sets.push({ t: tid, mi, start: s.start, text: wordsText_(s) });
+      const kp = tid + '-' + mi + '-';
+      if (s.type === 'words') { if (blanks_(s).some(b => has.has(kp + b.n))) sets.push({ type: 'words', t: tid, mi, start: s.start, text: wordsText_(s) }); }
+      else if (s.questions.some(q => has.has(kp + q.n))) sets.push(pracRead_(Object.assign({ t: tid, mi }, s)));
     })));
     return sets.length ? { sets, x: !open || open.showAnswers ? rcXFor_(tests, rows) : null } : null;
   }
@@ -888,12 +905,12 @@ function appendResult_(rec) {
     const lim = rec.limit > 0 ? ' (제한 ' + rec.limit + '분)' : ' (제한 없음)';
     // 빈칸 모음: "빈칸 5분 2초 (제한 없음)" / 모듈 하나: "M1 12분 3초 (제한 18분)" / 전체: "12분 3초 + 8분 0초"
     const used = rec.wr ? rec.used.map(fmt).join(' + ')
-      : rec.practice ? '빈칸 ' + fmt(rec.used[0]) + lim
+      : rec.practice ? PRAC_NAME[pracSec_(rec.practice.sec)] + ' ' + fmt(rec.used[0]) + lim
       : rec.lc ? (rec.module != null ? 'M' + (rec.module + 1) + ' ' : '') + fmt(rec.used[0])
       : rec.module != null ? 'M' + (rec.module + 1) + ' ' + fmt(rec.used[0]) + lim
       : rec.used.map(fmt).join(' + ');
     const label = rec.wr ? '라이팅 ' + rec.wr.title
-      : rec.practice ? '빈칸 TEST ' + rec.practice.from + (rec.practice.to !== rec.practice.from ? '-' + rec.practice.to : '')
+      : rec.practice ? PRAC_NAME[pracSec_(rec.practice.sec)] + ' TEST ' + rec.practice.from + (rec.practice.to !== rec.practice.from ? '-' + rec.practice.to : '')
       : rec.lc ? '리스닝 ' + rec.lc.title + (rec.module != null ? ' M' + (rec.module + 1) : '') + (rec.secs ? ' (' + rec.secs.map(s => LC_TYPE_NAME[s]).join(' · ') + ')' : '')
       : 'TEST ' + rec.testId + (rec.module != null ? ' M' + (rec.module + 1) : '') + (rec.secs ? ' (' + rec.secs.map(s => RC_SEC_NAME[s]).join(' · ') + ')' : '');
     const where = x => (x.t != null ? 'T' + x.t + ' ' : '') + 'M' + (x.mi + 1) + '-' + x.n;
@@ -911,10 +928,11 @@ function appendResult_(rec) {
     ]);
   }
 }
-// 유형별 [맞은 수, 문항 수]: 리딩 '0w' '0r' '1w' '1r', 빈칸 모음 'w', 리스닝 'resp' 'conv' 'ann' 'talk'
+// 유형별 [맞은 수, 문항 수]: 리딩 '0w' '0r' '1w' '1r', 모아 풀기 'w'(빈칸) 'd'(Daily Life) 'a'(Academic), 리스닝 'resp' 'conv' 'ann' 'talk'
+// practice: 모아 풀기 기록의 { from, to, sec } (아니면 null)
 function partsOf_(rows, practice) {
   const key = { response: 'resp', conversation: 'conv', announcement: 'ann', talk: 'talk' }, parts = {};
-  rows.forEach(x => { const k = x.kind === 'l' ? key[x.type] : practice ? 'w' : x.mi + x.kind; if (!k) return;
+  rows.forEach(x => { const k = x.kind === 'l' ? key[x.type] : practice ? (x.kind === 'w' ? 'w' : practice.sec === 'academic' ? 'a' : 'd') : x.mi + x.kind; if (!k) return;
     const p = parts[k] || (parts[k] = [0, 0]); p[1]++; if (x.ok) p[0]++; });
   return parts;
 }
@@ -930,13 +948,16 @@ function who_(r) {
 }
 function mine_(who, name, cls) { const c = norm_(cls); return norm_(name) === who.name && (c === who.cls || !c); }
 function time_(v) { return v instanceof Date ? v.getTime() : Number(v) || 0; }
-// 결과 시트의 회차 칸("TEST 5 M1", "TEST 5 M1 (Daily Life · Academic Passage)", "빈칸 TEST 1-10", "리스닝 NEW TOEFL 3 TEST 1 M2 (Best Response · Conversation)")에서 기록 종류를 읽는다
+// 결과 시트의 회차 칸("TEST 5 M1", "TEST 5 M1 (Daily Life · Academic Passage)", "빈칸 TEST 1-10", "Academic TEST 1-10", "리스닝 NEW TOEFL 3 TEST 1 M2 (Best Response · Conversation)")에서 기록 종류를 읽는다
 // 리스닝 Module 1 + 2 이어 풀기는 M이 없다 ("리스닝 NEW TOEFL 3 TEST 1 (Conversation)")
 function labelInfo_(label) {
   const s = String(label == null ? '' : label).trim(), out = { testId: null, module: null, practice: null, lc: null, secs: null, wr: null };
   let m;
   if ((m = s.match(/^라이팅 (NEW TOEFL 3 TEST (\d+))$/))) return Object.assign(out, { wr: { id: +m[2], title: m[1] } });
-  if ((m = s.match(/^빈칸 TEST (\d+)(?:-(\d+))?$/))) return Object.assign(out, { practice: { from: +m[1], to: +(m[2] || m[1]) } });
+  if ((m = s.match(/^(빈칸|Daily Life|Academic) TEST (\d+)(?:-(\d+))?$/))) {
+    const sec = Object.keys(PRAC_NAME).find(k => PRAC_NAME[k] === m[1]);
+    return Object.assign(out, { practice: Object.assign({ from: +m[2], to: +(m[3] || m[2]) }, sec === 'words' ? {} : { sec }) });
+  }
   if ((m = s.match(/^TEST (\d+)(?: M([12]))?(?: \((.+)\))?$/))) {
     const secs = m[3] ? m[3].split(' · ').map(x => Object.keys(RC_SEC_NAME).find(k => RC_SEC_NAME[k] === x)).filter(Boolean) : [];
     return Object.assign(out, { testId: +m[1], module: m[2] ? m[2] - 1 : null, secs: secs.length ? secs : null });
