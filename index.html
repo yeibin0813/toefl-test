@@ -29,8 +29,10 @@ const LET = ['A', 'B', 'C', 'D'];
 const me = () => ({ code: S.code.trim(), name: S.name.trim(), cls: S.cls.trim() });
 const PART_LABEL = { '0w': 'M1 Complete the Words', '0r': 'M1 Reading', '1w': 'M2 Complete the Words', '1r': 'M2 Reading', w: 'Complete the Words', build: '재배열' };
 
-// S.pick: { test(정답 없음), showAnswers } — 회차를 고른 뒤 모듈과 제한 시간을 고르는 화면
-// S.exam: { test, showAnswers, mod, set, answers, startedAt, limit(분, 0이면 제한 없음), endsAt(제한 없으면 null), used }
+// S.pick: { test(정답 없음), showAnswers } — 회차를 고른 뒤 모듈·섹션과 제한 시간을 고르는 화면
+// S.rcSecs: { id: 회차, [모듈 번호]: [고른 섹션] } — 모듈 카드에서 고른 리딩 섹션 (없거나 다른 회차 것이면 전부)
+// S.exam: { test, showAnswers, mod, secs, set, answers, startedAt, limit(분, 0이면 제한 없음), endsAt(제한 없으면 null), used }
+//   secs: 고른 섹션 (예: ['academic']). null이면 모듈 전체. 섹션만 고르면 test는 그 섹션 지문만 남긴 사본이고 test.src가 원래 회차다.
 //   빈칸 모아 풀기면 kind: 'words', from, to가 붙고, test는 빈칸 지문만 담은 모듈 하나짜리다.
 //   이때 지문마다 kp("회차-모듈")가 있어 답 키가 "7-0-3"처럼 회차끼리 겹치지 않는다.
 //   리스닝 시험이면 kind: 'lc' (listening.js 참고)
@@ -47,12 +49,20 @@ function periodNow() {
   return PERS.find(p => p.title === (S.period || title)) || PERS.find(p => p.title === title) || PERS[0];
 }
 lsSet(':mine', null); // 예전에는 기록을 이 기기에만 모았다. 이제 서버에서 받는다.
-const LIM = lsGet(':lim') || {}; // 모듈별로 마지막에 쓴 제한 시간 ("4-0": 18)
+const LIM = lsGet(':lim') || {}; // 모듈·섹션별로 마지막에 쓴 제한 시간 ("4-0": 18, "4-0:academic": 6)
 const WR = lsGet(':wr') || {};   // 빈칸 모아 풀기에서 마지막에 고른 범위와 제한 시간 { from, to, lim }
 // 다 풀고 보내는 중에 끊겼던 답안은 다시 보내는 화면부터 (시험 화면으로 돌아가지 않는다)
 if (S.exam && S.exam.done) { S.screen = 'result'; S.result = { pending: S.exam, status: 'fail', err: '지난번에 답안을 다 보내지 못했어요.' }; }
 else if (S.exam && (S.exam.limit != null || S.exam.kind === 'lc')) S.screen = 'exam'; else if (S.exam) { S.exam = null; lsSet(':exam', null); }
-const limitOf = (id, mi, m) => (LIM[id + '-' + mi] != null ? LIM[id + '-' + mi] : m.minutes);
+// 리딩 모듈에 있는 섹션 (시험 순서대로)과 섹션별 문항 수
+const rcSecsIn = m => RC_ORDER.filter(k => m.sets.some(s => rcSecOf(s) === k));
+const itemsOf = s => (s.type === 'words' ? blanksOf(s).length : s.questions.length);
+const secItems = (m, secs) => m.sets.filter(s => !secs || secs.includes(rcSecOf(s))).reduce((n, s) => n + itemsOf(s), 0);
+const rcPicked = (t, mi) => { const all = rcSecsIn(t.modules[mi]), sel = S.rcSecs && S.rcSecs.id === t.id && S.rcSecs[mi]; return sel ? all.filter(k => sel.includes(k)) : all; };
+// 제한 시간 기본값: 모듈 전체면 모듈 시간, 섹션만 고르면 문항 수에 비례 (0.5분 단위). 바꾸면 모듈·섹션 조합마다 기억한다
+const limKey = (id, mi, secs) => id + '-' + mi + (secs ? ':' + secs.join(',') : '');
+const limitOf = (id, mi, m, secs) => { const k = limKey(id, mi, secs);
+  return LIM[k] != null ? LIM[k] : secs ? Math.max(1, Math.round(m.minutes * secItems(m, secs) / secItems(m) * 2) / 2) : m.minutes; };
 
 const fmtTime = s => { s = Math.max(0, Math.round(s)); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
 const fmtDate = ms => { const d = new Date(ms); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
@@ -64,10 +74,10 @@ const span = p => (p.from === p.to ? `${p.from}` : `${p.from}–${p.to}`);
 // 닫힌 회차에 낸 답안은 점수를 돌려받지 않는다 (score가 null)
 const scoreText = a => (a.score == null ? '제출함' : `${a.score}/${a.total}`);
 const recLabel = a => (a.wr ? `라이팅 ${a.wr.title}` : a.practice ? `빈칸 TEST ${span(a.practice)}` : a.lc ? `리스닝 ${a.lc.title} · ${lcModName(a.mod)}${a.secs ? ` (${lcSecNames(a.secs)})` : ''}`
-  : a.testId != null ? `TEST ${a.testId} · ${modName(a.mod)}` : a.label || '기록');
+  : a.testId != null ? `TEST ${a.testId} · ${modName(a.mod)}${a.secs ? ` (${rcSecNames(a.secs)})` : ''}` : a.label || '기록');
 // 결과·다시 보기 화면 제목 (HTML)
 const recTitle = r => (r.wr ? `라이팅 ${esc(r.wr.title)}` : r.practice ? `빈칸 TEST ${span(r.practice)}` : r.lc ? `리스닝 ${esc(r.lc.title)} · ${lcModName(r.module)}${r.secs ? ` (${esc(lcSecNames(r.secs))})` : ''}`
-  : r.testId != null ? `TEST ${esc(r.testId)} · ${modName(r.module)}` : esc(r.label || '기록'));
+  : r.testId != null ? `TEST ${esc(r.testId)} · ${modName(r.module)}${r.secs ? ` (${esc(rcSecNames(r.secs))})` : ''}` : esc(r.label || '기록'));
 const rowLabel = x => (x.t != null ? `T${x.t} ` : '') + `M${x.mi + 1}-${x.n}`;
 
 const keyPre = (mi, set) => (set.kp != null ? set.kp : mi);
@@ -130,14 +140,18 @@ async function startTest(id) {
   S.busy = 'start' + id; S.err = ''; render();
   try {
     const j = await api('getTest', Object.assign(me(), { id }));
-    S.pick = { test: j.test, showAnswers: j.showAnswers };
+    S.pick = { test: j.test, showAnswers: j.showAnswers }; S.rcSecs = { id: j.test.id };
     S.screen = 'pick'; S.busy = ''; render(); window.scrollTo(0, 0);
   } catch (e) { S.err = e.message; S.busy = ''; render(); }
 }
 function startModule(mi) {
-  const t = S.pick.test, m = t.modules[mi];
-  const limit = Math.max(0, Math.min(120, Number(limitOf(t.id, mi, m)) || 0));
-  S.exam = { test: t, showAnswers: S.pick.showAnswers, mod: mi, set: 0, answers: {}, startedAt: Date.now(), limit, endsAt: limit > 0 ? Date.now() + limit * 60000 : null, used: [] };
+  const t = S.pick.test, m = t.modules[mi], sel = rcPicked(t, mi);
+  if (!sel.length) return;
+  const secs = sel.length === rcSecsIn(m).length ? null : sel;  // 전부 고르면 모듈 전체
+  const limit = Math.max(0, Math.min(120, Number(limitOf(t.id, mi, m, secs)) || 0));
+  // 섹션만 고르면 그 섹션 지문만 남긴 사본으로 푼다 (문항 번호·답 키는 그대로)
+  const test = secs ? Object.assign({}, t, { src: t, modules: t.modules.map((x, i) => (i === mi ? Object.assign({}, x, { sets: x.sets.filter(s => secs.includes(rcSecOf(s))) }) : x)) }) : t;
+  S.exam = { test, showAnswers: S.pick.showAnswers, mod: mi, secs, set: 0, answers: {}, startedAt: Date.now(), limit, endsAt: limit > 0 ? Date.now() + limit * 60000 : null, used: [] };
   persist(); S.screen = 'exam'; S.modal = null; render(); window.scrollTo(0, 0);
 }
 // 빈칸 모아 풀기: 고른 범위의 빈칸 지문만 받아 모듈 하나짜리 시험처럼 푼다.
@@ -182,7 +196,7 @@ async function finish() {
   const who = { name: S.name.trim(), period: S.period, cls: S.cls };
   const body = Object.assign(wr ? { code: S.code.trim(), id: e.test.id, answers: wrAnswers(e), used: e.used, startedAt: e.startedAt } : words
     ? { code: S.code.trim(), from: e.from, to: e.to, limit: e.limit, answers: e.answers, used: e.used, startedAt: e.startedAt }
-    : { code: S.code.trim(), id: e.test.id, module: e.both ? 'both' : e.mod, limit: e.limit, answers: e.answers, used: e.used, startedAt: e.startedAt }, who, { attempt: e.attempt }, lc && e.secs ? { secs: e.secs } : {});
+    : { code: S.code.trim(), id: e.test.id, module: e.both ? 'both' : e.mod, limit: e.limit, answers: e.answers, used: e.used, startedAt: e.startedAt }, who, { attempt: e.attempt }, e.secs ? { secs: e.secs } : {});
   let j = null, err = '';
   for (let i = 0; i < 3 && !j; i++) {
     try { j = await api(wr ? 'submitWriting' : words ? 'submitWords' : lc ? 'submitListening' : 'submit', body); } catch (x) { err = x.message; await new Promise(r => setTimeout(r, 1500)); }
@@ -190,7 +204,7 @@ async function finish() {
   if (j) {
     S.exam = null; lsSet(':exam', null);
     // 같은 회차의 다른 모듈을 바로 풀 수 있게
-    S.pick = words || lc || wr ? null : { test: e.test, showAnswers: e.showAnswers };
+    S.pick = words || lc || wr ? null : { test: e.test.src || e.test, showAnswers: e.showAnswers };
     S.lcPick = lc ? { test: e.test.src || e.test, showAnswers: e.showAnswers } : null;
     const r = j.result;
     addMine({ id: r.id, testId: r.testId, module: r.module, mod: words ? 'w' : e.both ? null : e.mod, practice: r.practice || null, lc: r.lc || null, wr: r.wr || null, secs: r.secs || null,
@@ -222,7 +236,7 @@ function topBar() {
   else if (S.screen === 'exam' && S.exam && S.exam.kind === 'wr') mid = wrTopBar();
   else if (S.screen === 'exam' && S.exam) {
     const e = S.exam, m = e.test.modules[e.mod];
-    mid = `<span class="chip num">TEST ${esc(e.test.id)}</span><span class="chip">${m.name}</span><span class="spacer"></span>` +
+    mid = `<span class="chip num">TEST ${esc(e.test.id)}</span><span class="chip">${m.name}${e.secs ? ' · ' + esc(rcSecNames(e.secs)) : ''}</span><span class="spacer"></span>` +
       (e.endsAt ? `<span class="timer num" id="timer" aria-label="남은 시간">${fmtTime((e.endsAt - Date.now()) / 1000)}</span>`
         : `<span class="timer num up" id="timer" aria-label="지난 시간" title="제한 시간 없음">${fmtTime((Date.now() - e.startedAt) / 1000)}</span>`);
   } else {
@@ -253,7 +267,7 @@ function viewHome() {
         <div><button class="btn primary" type="submit"${S.busy ? ' disabled' : ''}>${S.busy === 'enter' ? '확인 중…' : '입장'}</button></div>
       </form></div>`;
   }
-  const all = mineList(), best = id => bestText(all && all.filter(a => a.testId === id && !a.practice && !a.lc), a => modName(a.mod));
+  const all = mineList(), best = id => bestText(all && all.filter(a => a.testId === id && !a.practice && !a.lc), a => modName(a.mod) + (a.secs ? ` (${esc(rcSecNames(a.secs))})` : ''));
   const cards = S.tests.map(t => `<article class="tcard"><h3>TEST ${t.id}</h3>
     <dl>${t.modules.map(m => `<dt>${esc(m.name)}</dt><dd>${fmtMin(m.minutes)} · 단어 ${m.words} · 리딩 ${m.read}</dd>`).join('')}</dl>
     <div class="best">${best(t.id)}</div>
@@ -261,9 +275,9 @@ function viewHome() {
   const tab = ['rc', 'lc', 'wr'].includes(S.tab) ? S.tab : 'rc', lcTab = tab === 'lc';
   return `<div class="home">
     <section class="hero"><h1>${esc(S.name)} 님, 회차를 골라 주세요</h1>
-      <p>${tab === 'wr' ? '재배열 10문항(6분), 이메일(7분), 토론(10분)을 차례로 풀어요. 재배열은 자동으로 채점되고, 이메일·토론 글은 선생님께 전달돼요.'
+      <p>${tab === 'wr' ? '재배열 10문항(6분 50초), 이메일(7분), 토론(10분)을 차례로 풀어요. 재배열은 자동으로 채점되고, 이메일·토론 글은 선생님께 전달돼요.'
         : lcTab ? '회차를 고른 뒤 Module 1과 Module 2 중 하나를 골라 풀어요. 음원은 한 번만 나오고, 문제는 하나씩 정해진 시간 안에 풀어요. 끝나면 점수가 선생님께 자동으로 전달돼요.'
-        : '회차를 고른 뒤 Module 1과 Module 2 중 하나를 골라 풀어요. 빈칸 문제는 빠진 글자만 입력하세요. 끝나면 점수가 선생님께 자동으로 전달돼요.'}</p></section>
+        : '회차를 고른 뒤 Module 1과 Module 2 중 하나를 골라 풀어요. Complete the Words · Daily Life · Academic Passage 중 원하는 섹션만 골라 풀 수도 있어요. 빈칸 문제는 빠진 글자만 입력하세요. 끝나면 점수가 선생님께 자동으로 전달돼요.'}</p></section>
     ${S.exam && S.exam.done ? `<div class="banner warn">보내지 못한 답안이 있어요. 다른 시험을 시작하면 그 답안은 사라져요. <button class="btn small" data-act="retry">다시 보내기</button></div>` : ''}
     <div class="tabs" role="tablist">${[['rc', '리딩'], ['lc', '리스닝'], ['wr', '라이팅']].map(([k, l]) => `<button class="tab${tab === k ? ' on' : ''}" data-act="tab" data-tab="${k}" role="tab" aria-selected="${tab === k}">${l}</button>`).join('')}</div>
     ${S.err ? `<div class="banner bad">${esc(S.err)}</div>` : ''}
@@ -334,18 +348,20 @@ function viewWordsCard() {
 function viewPick() {
   const t = S.pick.test;
   const cards = t.modules.map((m, mi) => {
-    const words = m.sets.filter(s => s.type === 'words').reduce((n, s) => n + blanksOf(s).length, 0);
-    const read = m.sets.filter(s => s.type === 'read').reduce((n, s) => n + s.questions.length, 0);
-    const all = mineList(), done = all && all.filter(a => a.testId === t.id && !a.practice && !a.lc && a.mod === mi);
+    const all = rcSecsIn(m), sel = rcPicked(t, mi), secs = sel.length === all.length ? null : sel, n = secItems(m, sel);
+    const desc = k => { const ss = m.sets.filter(s => rcSecOf(s) === k), q = ss.reduce((c, s) => c + itemsOf(s), 0); return `지문 ${ss.length}개 · ${k === 'words' ? '빈칸' : '문제'} ${q}개`; };
+    const recs = mineList(), done = recs && recs.filter(a => a.testId === t.id && !a.practice && !a.lc && a.mod === mi);
     return `<article class="tcard"><h3>${esc(m.name)}</h3>
-      <dl><dt>문제</dt><dd>단어 ${words} · 리딩 ${read} · 총 ${words + read}문제</dd><dt>기본 시간</dt><dd>${fmtMin(m.minutes)}</dd></dl>
-      <label class="field">제한 시간 (분)<span class="inline"><input type="number" class="lim" id="lim${mi}" data-mi="${mi}" min="0" max="120" step="0.5" value="${limitOf(t.id, mi, m)}" aria-label="${esc(m.name)} 제한 시간(분)"><span class="note">0이면 제한 없이 풀어요</span></span></label>
-      <div class="best">${bestText(done, () => '')}</div>
-      <button class="btn primary" data-act="startMod" data-mi="${mi}">${esc(m.name)} 시작</button></article>`;
+      <fieldset class="lcsecs"><legend>풀 섹션 <span class="note">원하는 섹션만 골라 풀 수 있어요</span></legend>
+        ${all.map(k => `<label class="check"><input type="checkbox" data-rcsec="${mi}" value="${k}"${sel.includes(k) ? ' checked' : ''}>${RC_SEC[k]} <span class="note">${desc(k)}</span></label>`).join('')}</fieldset>
+      <dl><dt>기본 시간</dt><dd>${fmtMin(m.minutes)}${secs ? ' (모듈 전체)' : ''}</dd></dl>
+      <label class="field">제한 시간 (분)<span class="inline"><input type="number" class="lim" id="lim${mi}" data-lk="${esc(limKey(t.id, mi, secs))}" min="0" max="120" step="0.5" value="${limitOf(t.id, mi, m, secs)}" aria-label="${esc(m.name)} 제한 시간(분)"><span class="note">${secs ? '고른 섹션 문항 수에 맞춘 시간이에요. ' : ''}0이면 제한 없이 풀어요</span></span></label>
+      <div class="best">${bestText(done, a => (a.secs ? esc(rcSecNames(a.secs)) : ''))}</div>
+      ${sel.length ? `<button class="btn primary" data-act="startMod" data-mi="${mi}">${esc(m.name)} 시작 · ${n}문제</button>` : `<button class="btn primary" disabled>섹션을 하나 이상 고르세요</button>`}</article>`;
   }).join('');
   return `<div class="home">
     <div class="qhead" style="margin:0"><h2 style="font-size:24px">TEST ${t.id}</h2><button class="btn small" data-act="home">회차 목록</button></div>
-    <p class="note" style="margin:0">풀 모듈을 하나 고르세요. 시작 버튼을 누르면 타이머가 바로 돌아가고, 제한 시간이 끝나면 자동으로 제출돼요. 한 모듈을 끝내면 다른 모듈도 이어서 풀 수 있어요.</p>
+    <p class="note" style="margin:0">풀 모듈을 하나 고르고, 원하면 섹션만 골라 풀어요. 시작 버튼을 누르면 타이머가 바로 돌아가고, 제한 시간이 끝나면 자동으로 제출돼요. 한 모듈을 끝내면 다른 모듈·섹션도 이어서 풀 수 있어요.</p>
     <section class="tests">${cards}</section></div>`;
 }
 // e.set은 지금 보는 화면 번호다 (pagesOf 순서).
@@ -360,8 +376,10 @@ function viewExam() {
     const full = e.kind === 'words' ? `TEST ${pg.s.t} Module ${pg.s.mi + 1} ${rangeOf(pg.s).replace(/^T\d+ /, '')}` : `문제 ${label}`;
     return `<button class="dot${done ? ' done' : ''}${i === pi ? ' cur' : ''}" data-act="go" data-i="${i}" aria-label="${full}" title="${full}">${label}</button>`; }).join('');
   const body = set.type === 'words' ? renderWords(set, e.mod) : `<div class="split">${renderPassage(set, e.mod, p.q)}${renderQuestion(set, e.mod, p.q)}</div>`;
-  const total = m.sets.flatMap(s => keysOfSet(e.mod, s)).length;
+  const keys = m.sets.flatMap(s => keysOfSet(e.mod, s)), total = keys.length, pk = keysOfPage(e.mod, p), pos = k => keys.indexOf(k) + 1;
+  // 섹션만 골라 풀면 원래 문항 번호와 함께 이번에 푸는 문항 중 몇 번째인지 보여 준다
   const where = e.kind === 'words' ? `지문 ${pi + 1} / ${pages.length} · TEST ${set.t} Module ${set.mi + 1} · ${blanksOf(set)[0].n}–${blanksOf(set).slice(-1)[0].n}번`
+    : e.secs ? (p.q ? `Question ${p.q.n} · ${pos(pk[0])}/${total}` : `Questions ${rangeOf(set)} · ${pos(pk[0])}–${pos(pk[pk.length - 1])}/${total}`)
     : p.q ? `Question ${p.q.n} of ${total}` : `Questions ${rangeOf(set)} of ${total}`;
   return `<div class="qhead"><h2>${set.type === 'words' ? 'Fill in the missing letters in the paragraph' : esc(set.kind)}</h2><span class="note num">${where}</span></div>
     ${body}
@@ -499,7 +517,7 @@ document.addEventListener('input', ev => {
   if (el.id === 'code') { S.code = el.value; return; }
   // 제한 시간은 치는 동안에도 기억해 둔다 (내 기록을 받아 화면을 다시 그려도 친 값이 남게)
   if (el.id === 'wLim') { WR.lim = Math.max(0, Math.min(300, Number(el.value) || 0)); lsSet(':wr', WR); return; }
-  if (el.classList.contains('lim') && S.pick && el.dataset.mi != null) { LIM[S.pick.test.id + '-' + el.dataset.mi] = Math.max(0, Math.min(120, Number(el.value) || 0)); lsSet(':lim', LIM); return; }
+  if (el.classList.contains('lim') && S.pick && el.dataset.lk) { LIM[el.dataset.lk] = Math.max(0, Math.min(120, Number(el.value) || 0)); lsSet(':lim', LIM); return; }
   if (el.classList.contains('blank') && el.dataset.k && S.exam) {
     el.value = el.value.replace(/[^A-Za-z]/g, '').toLowerCase();
     S.exam.answers[el.dataset.k] = el.value; persist();
@@ -531,9 +549,14 @@ document.addEventListener('change', ev => {
   } else if (el.id === 'wLim') {
     const v = Math.max(0, Math.min(300, Number(el.value) || 0)); el.value = v;
     WR.lim = v; lsSet(':wr', WR);
-  } else if (el.classList.contains('lim') && S.pick) {
+  } else if (el.classList.contains('lim') && S.pick && el.dataset.lk) {
     const v = Math.max(0, Math.min(120, Number(el.value) || 0)); el.value = v;
-    LIM[S.pick.test.id + '-' + el.dataset.mi] = v; lsSet(':lim', LIM);
+    LIM[el.dataset.lk] = v; lsSet(':lim', LIM);
+  } else if (el.type === 'checkbox' && el.dataset.rcsec != null && S.pick) {
+    const mi = +el.dataset.rcsec, t = S.pick.test;
+    if (!S.rcSecs || S.rcSecs.id !== t.id) S.rcSecs = { id: t.id };
+    S.rcSecs[mi] = rcSecsIn(t.modules[mi]).filter(k => document.querySelector(`input[data-rcsec="${mi}"][value="${k}"]`).checked);
+    render();
   }
 });
 function updateDots() {

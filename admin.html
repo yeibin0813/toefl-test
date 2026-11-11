@@ -25,7 +25,7 @@ const LC_TYPE = { response: 'Best Response', conversation: 'Conversation', annou
 const modName = mi => (mi === 0 || mi === 1 ? `M${mi + 1}` : '전체');
 // 빈칸 모아 풀기 기록은 testId가 없고 practice: { from, to }가 있다.
 // 리스닝 기록은 lc: { id, title }가 있다.
-const testLabel = a => (a.wr ? `라이팅 ${a.wr.title}` : a.lc ? `리스닝 ${a.lc.title}${a.secs && a.secs.length ? ` (${a.secs.map(s => LC_TYPE[s] || s).join(' · ')})` : ''}` : !a.practice ? `TEST ${a.testId}` : a.practice.from === a.practice.to ? `빈칸 TEST ${a.practice.from}` : `빈칸 TEST ${a.practice.from}–${a.practice.to}`);
+const testLabel = a => (a.wr ? `라이팅 ${a.wr.title}` : a.lc ? `리스닝 ${a.lc.title}${a.secs && a.secs.length ? ` (${a.secs.map(s => LC_TYPE[s] || s).join(' · ')})` : ''}` : !a.practice ? `TEST ${a.testId}${a.secs && a.secs.length ? ` (${rcSecNames(a.secs)})` : ''}` : a.practice.from === a.practice.to ? `빈칸 TEST ${a.practice.from}` : `빈칸 TEST ${a.practice.from}–${a.practice.to}`);
 const modLabel = a => (a.practice ? '빈칸' : a.wr ? '재배열' : modName(a.module));
 const rowLabel = x => (x.t != null ? `T${x.t} ` : '') + `M${x.mi + 1}-${x.n}`;
 // 학생 이름은 띄어쓰기만 다르면 한 사람으로 본다. 이름에 '테스트'·'확인용'이 들어간 기록은 선생님 확인용으로 보고 숨길 수 있다.
