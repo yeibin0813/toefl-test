@@ -11,6 +11,9 @@ document.addEventListener('toggle', ev => { const d = ev.target; if (d.dataset &
 const RC_SEC = { words: 'Complete the Words', daily: 'Daily Life', academic: 'Academic Passage' }, RC_ORDER = ['words', 'daily', 'academic'];
 const rcSecOf = s => (s.type === 'words' ? 'words' : /academic/i.test(s.kind || '') ? 'academic' : 'daily');
 const rcSecNames = secs => (secs || []).map(s => RC_SEC[s] || s).join(' · ');
+// 모아 풀기 (서버 PRAC_NAME과 같다). practice.sec이 없으면 빈칸
+const PRAC_NAME = { words: '빈칸', daily: 'Daily Life', academic: 'Academic' };
+const pracName = p => PRAC_NAME[(p && p.sec) || 'words'] || '빈칸';
 const BLANK = /\[(\d+)\]/g;
 function blanksOf(set) { const out = []; let i = 0; set.text.replace(BLANK, (a, len) => { out.push({ n: set.start + i++, len: +len }); return a; }); return out; }
 const rowMap = rows => { const by = {}; rows.forEach(x => { by[x.k] = x; }); return by; };
@@ -23,10 +26,11 @@ function rcReviewBody(V) {
     return html ? `<section class="stack"><h3 class="rvmod">${esc(m.name)}</h3>${html}</section>` : '';
   }).join('');
 }
-// 빈칸 모아 풀기: 회차·모듈마다 빈칸 지문
+// 모아 풀기: 회차·모듈마다 지문 (빈칸 또는 리딩)
 function wordsReviewBody(V) {
   const by = rowMap(V.r.rows);
-  return V.content.sets.map(s => rvWords(s, s.t + '-' + s.mi, by, V, `TEST ${esc(s.t)} · Module ${s.mi + 1}`)).join('');
+  return V.content.sets.map(s => { const kp = s.t + '-' + s.mi, where = `TEST ${esc(s.t)} · Module ${s.mi + 1}`;
+    return s.type === 'read' ? rvRead(s, kp, by, V, where) : rvWords(s, kp, by, V, where); }).join('');
 }
 // 리딩 해설 (서버가 정답 공개일 때, 푼 문항 것만 답 키로 보낸다)
 const rvX = (V, k) => { const t = V.content && V.content.x && V.content.x[k]; return t ? { exp: t } : null; };
@@ -52,12 +56,12 @@ function rvWords(set, kp, by, V, title) {
   });
   return `<div class="sheet words rvwords">${title ? `<div class="eyebrow">${title}</div>` : ''}${html}</div>${rvWordsX(bl, xs, kp, V)}`;
 }
-// 리딩 지문 하나와 그 문제들. 문장 넣기 문제가 있으면 지문의 ■ 자리에 A~D를 붙이고, 내가 고른 자리와 정답 자리를 칠한다.
-function rvRead(set, mi, by, V) {
-  set.questions.forEach(q => { const x = by[mi + '-' + q.n]; if (x) V.seen.add(x.k); });
-  const qs = set.questions.filter(q => { const x = by[mi + '-' + q.n]; return x && (!V.onlyWrong || !x.ok); });
+// 리딩 지문 하나와 그 문제들. kp는 답 키 앞부분 (모듈 번호 "0" 또는 모아 풀기의 "7-0"), where는 지문 위에 붙일 회차·모듈 표시. 문장 넣기 문제가 있으면 지문의 ■ 자리에 A~D를 붙이고, 내가 고른 자리와 정답 자리를 칠한다.
+function rvRead(set, kp, by, V, where) {
+  set.questions.forEach(q => { const x = by[kp + '-' + q.n]; if (x) V.seen.add(x.k); });
+  const qs = set.questions.filter(q => { const x = by[kp + '-' + q.n]; return x && (!V.onlyWrong || !x.ok); });
   if (!qs.length) return '';
-  const ins = set.questions.find(q => q.insert), ix = ins && by[mi + '-' + ins.n];
+  const ins = set.questions.find(q => q.insert), ix = ins && by[kp + '-' + ins.n];
   let i = 0;
   const mark = () => { const L = LET[i++] || '', c = ix ? (ix.given === L ? (ix.ok ? ' mine' : ' mine bad') : '') + (ix.correct === L ? ' right' : '') : '';
     return `<span class="insmark${c}">■ ${L}</span>`; };
@@ -66,8 +70,8 @@ function rvRead(set, mi, by, V) {
     return `<p>${ins ? h.replace(/■/g, mark) : h.replace(/ ?■ ?/g, ' ').replace(/ {2,}/g, ' ').trim()}</p>`;
   }).join('');
   const cards = qs.map(q => rvChoice(q.n, q.insert ? '다음 문장이 들어갈 가장 알맞은 위치를 고르세요.' : q.q, q.insert ? LET.map(L => `위치 ■ ${L}`) : q.c,
-    by[mi + '-' + q.n], q.insert ? `<div class="insert-sent">${esc(q.insert)}</div>` : '', rvX(V, mi + '-' + q.n))).join('');
-  return `<div class="split rvsplit"><div class="sheet passage">${set.kind ? `<div class="eyebrow">${esc(set.kind)}</div>` : ''}${set.title ? `<h3>${esc(set.title)}</h3>` : ''}${passage}</div>
+    by[kp + '-' + q.n], q.insert ? `<div class="insert-sent">${esc(q.insert)}</div>` : '', rvX(V, kp + '-' + q.n))).join('');
+  return `<div class="split rvsplit"><div class="sheet passage">${set.kind || where ? `<div class="eyebrow">${where ? where + (set.kind ? ' · ' : '') : ''}${esc(set.kind || '')}</div>` : ''}${set.title ? `<h3>${esc(set.title)}</h3>` : ''}${passage}</div>
     <div class="stack">${cards}</div></div>`;
 }
 // 객관식 한 문제: 내 답과 정답(정답 공개일 때만 x.correct가 있다)을 표시한다

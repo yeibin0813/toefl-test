@@ -23,10 +23,10 @@ RV_MINE = '학생 답';
 const PART_LABEL = { build: '재배열', '0w': 'M1 단어', '0r': 'M1 리딩', '1w': 'M2 단어', '1r': 'M2 리딩', resp: 'Best Response', conv: 'Conversation', ann: 'Announcement', talk: 'Academic Talk' };
 const LC_TYPE = { response: 'Best Response', conversation: 'Conversation', announcement: 'Announcement', talk: 'Academic Talk' };
 const modName = mi => (mi === 0 || mi === 1 ? `M${mi + 1}` : '전체');
-// 빈칸 모아 풀기 기록은 testId가 없고 practice: { from, to }가 있다.
+// 모아 풀기 기록은 testId가 없고 practice: { from, to, sec(Daily Life daily · Academic academic, 빈칸이면 없음) }가 있다.
 // 리스닝 기록은 lc: { id, title }가 있다.
-const testLabel = a => (a.wr ? `라이팅 ${a.wr.title}` : a.lc ? `리스닝 ${a.lc.title}${a.secs && a.secs.length ? ` (${a.secs.map(s => LC_TYPE[s] || s).join(' · ')})` : ''}` : !a.practice ? `TEST ${a.testId}${a.secs && a.secs.length ? ` (${rcSecNames(a.secs)})` : ''}` : a.practice.from === a.practice.to ? `빈칸 TEST ${a.practice.from}` : `빈칸 TEST ${a.practice.from}–${a.practice.to}`);
-const modLabel = a => (a.practice ? '빈칸' : a.wr ? '재배열' : modName(a.module));
+const testLabel = a => (a.wr ? `라이팅 ${a.wr.title}` : a.lc ? `리스닝 ${a.lc.title}${a.secs && a.secs.length ? ` (${a.secs.map(s => LC_TYPE[s] || s).join(' · ')})` : ''}` : !a.practice ? `TEST ${a.testId}${a.secs && a.secs.length ? ` (${rcSecNames(a.secs)})` : ''}` : a.practice.from === a.practice.to ? `${pracName(a.practice)} TEST ${a.practice.from}` : `${pracName(a.practice)} TEST ${a.practice.from}–${a.practice.to}`);
+const modLabel = a => (a.practice ? pracName(a.practice) : a.wr ? '재배열' : modName(a.module));
 const rowLabel = x => (x.t != null ? `T${x.t} ` : '') + `M${x.mi + 1}-${x.n}`;
 // 학생 이름은 띄어쓰기만 다르면 한 사람으로 본다. 이름에 '테스트'·'확인용'이 들어간 기록은 선생님 확인용으로 보고 숨길 수 있다.
 const nk = s => String(s ?? '').replace(/\s+/g, '');
@@ -116,7 +116,7 @@ function filterBar(extra) {
     <div class="toolbar">
       <select id="period" aria-label="기간 선택"><option value="">전체 기간</option>${periods.map(p => `<option value="${esc(p)}"${S.period === p ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select>
       <select id="cls" aria-label="반 선택"><option value="">전체 반</option>${classes.map(c => `<option value="${esc(c)}"${S.cls === c ? ' selected' : ''}>${esc(c)} (${counts[c]})</option>`).join('')}</select>
-      <select id="filter" aria-label="회차 선택"><option value="all">전체 회차</option>${R.some(a => a.lc) ? `<option value="lc"${S.filter === 'lc' ? ' selected' : ''}>리스닝</option>` : ''}${hasWords ? `<option value="words"${S.filter === 'words' ? ' selected' : ''}>빈칸 모아 풀기</option>` : ''}${R.some(a => a.wr) ? `<option value="wr"${S.filter === 'wr' ? ' selected' : ''}>라이팅</option>` : ''}${testIds.map(id => `<option value="${id}"${S.filter === String(id) ? ' selected' : ''}>TEST ${id}</option>`).join('')}</select>
+      <select id="filter" aria-label="회차 선택"><option value="all">전체 회차</option>${R.some(a => a.lc) ? `<option value="lc"${S.filter === 'lc' ? ' selected' : ''}>리스닝</option>` : ''}${hasWords ? `<option value="words"${S.filter === 'words' ? ' selected' : ''}>모아 풀기</option>` : ''}${R.some(a => a.wr) ? `<option value="wr"${S.filter === 'wr' ? ' selected' : ''}>라이팅</option>` : ''}${testIds.map(id => `<option value="${id}"${S.filter === String(id) ? ' selected' : ''}>TEST ${id}</option>`).join('')}</select>
       <input type="date" id="from" value="${S.from}" aria-label="시작 날짜"><span class="note">~</span><input type="date" id="to" value="${S.to}" aria-label="끝 날짜">
       ${chips.map(([l, f, e]) => `<button class="dchip" data-act="dq" data-from="${f}" data-to="${e}" aria-pressed="${S.from === f && S.to === e}">${l}</button>`).join('')}
     </div>

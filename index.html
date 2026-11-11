@@ -27,14 +27,14 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const LET = ['A', 'B', 'C', 'D'];
 // 서버에 보내는 학생 정보: 입장 코드와 반·이름 (반·학생별로 연 회차를 서버가 이것으로 찾는다)
 const me = () => ({ code: S.code.trim(), name: S.name.trim(), cls: S.cls.trim() });
-const PART_LABEL = { '0w': 'M1 Complete the Words', '0r': 'M1 Reading', '1w': 'M2 Complete the Words', '1r': 'M2 Reading', w: 'Complete the Words', build: '재배열' };
+const PART_LABEL = { '0w': 'M1 Complete the Words', '0r': 'M1 Reading', '1w': 'M2 Complete the Words', '1r': 'M2 Reading', w: 'Complete the Words', d: 'Daily Life', a: 'Academic Passage', build: '재배열' };
 
 // S.pick: { test(정답 없음), showAnswers } — 회차를 고른 뒤 모듈·섹션과 제한 시간을 고르는 화면
 // S.rcSecs: { id: 회차, [모듈 번호]: [고른 섹션] } — 모듈 카드에서 고른 리딩 섹션 (없거나 다른 회차 것이면 전부)
 // S.exam: { test, showAnswers, mod, secs, set, answers, startedAt, limit(분, 0이면 제한 없음), endsAt(제한 없으면 null), used }
 //   secs: 고른 섹션 (예: ['academic']). null이면 모듈 전체. 섹션만 고르면 test는 그 섹션 지문만 남긴 사본이고 test.src가 원래 회차다.
-//   빈칸 모아 풀기면 kind: 'words', from, to가 붙고, test는 빈칸 지문만 담은 모듈 하나짜리다.
-//   이때 지문마다 kp("회차-모듈")가 있어 답 키가 "7-0-3"처럼 회차끼리 겹치지 않는다.
+//   모아 풀기면 kind: 'words', from, to, sec(빈칸 'words' · Daily Life 'daily' · Academic 'academic', 예전 기록은 없음 = 빈칸)가 붙고,
+//   test는 그 섹션 지문만 담은 모듈 하나짜리다. 지문마다 kp("회차-모듈")가 있어 답 키가 "7-0-3"처럼 회차끼리 겹치지 않는다.
 //   리스닝 시험이면 kind: 'lc' (listening.js 참고)
 // S.mine: 내 기록 (서버에서 같은 반·이름으로 찾은 것) { status: 'loading' | 'ok' | 'err', list, added(이번에 새로 낸 것), err, more }
 // S.review: 기록 하나 다시 보기 { id, back('home' | 'result'), status, r, showAnswers, content, onlyWrong, err }
@@ -50,7 +50,10 @@ function periodNow() {
 }
 lsSet(':mine', null); // 예전에는 기록을 이 기기에만 모았다. 이제 서버에서 받는다.
 const LIM = lsGet(':lim') || {}; // 모듈·섹션별로 마지막에 쓴 제한 시간 ("4-0": 18, "4-0:academic": 6)
-const WR = lsGet(':wr') || {};   // 빈칸 모아 풀기에서 마지막에 고른 범위와 제한 시간 { from, to, lim }
+const WR = lsGet(':wr') || {};   // 모아 풀기에서 마지막에 고른 범위·섹션과 제한 시간 { from, to, sec, lim(빈칸), lims: { daily, academic } }
+const pracSec = () => (WR.sec === 'daily' || WR.sec === 'academic' ? WR.sec : 'words');
+const pracLim = sec => Math.max(0, Math.min(300, Number(sec === 'words' ? WR.lim : (WR.lims || {})[sec]) || 0));
+const setPracLim = (sec, v) => { if (sec === 'words') WR.lim = v; else (WR.lims = WR.lims || {})[sec] = v; lsSet(':wr', WR); };
 // 다 풀고 보내는 중에 끊겼던 답안은 다시 보내는 화면부터 (시험 화면으로 돌아가지 않는다)
 if (S.exam && S.exam.done) { S.screen = 'result'; S.result = { pending: S.exam, status: 'fail', err: '지난번에 답안을 다 보내지 못했어요.' }; }
 else if (S.exam && (S.exam.limit != null || S.exam.kind === 'lc')) S.screen = 'exam'; else if (S.exam) { S.exam = null; lsSet(':exam', null); }
@@ -73,21 +76,22 @@ const lcModName = mi => (mi == null ? 'Module 1 + 2' : modName(mi));
 const span = p => (p.from === p.to ? `${p.from}` : `${p.from}–${p.to}`);
 // 닫힌 회차에 낸 답안은 점수를 돌려받지 않는다 (score가 null)
 const scoreText = a => (a.score == null ? '제출함' : `${a.score}/${a.total}`);
-const recLabel = a => (a.wr ? `라이팅 ${a.wr.title}` : a.practice ? `빈칸 TEST ${span(a.practice)}` : a.lc ? `리스닝 ${a.lc.title} · ${lcModName(a.mod)}${a.secs ? ` (${lcSecNames(a.secs)})` : ''}`
+const recLabel = a => (a.wr ? `라이팅 ${a.wr.title}` : a.practice ? `${pracName(a.practice)} TEST ${span(a.practice)}` : a.lc ? `리스닝 ${a.lc.title} · ${lcModName(a.mod)}${a.secs ? ` (${lcSecNames(a.secs)})` : ''}`
   : a.testId != null ? `TEST ${a.testId} · ${modName(a.mod)}${a.secs ? ` (${rcSecNames(a.secs)})` : ''}` : a.label || '기록');
 // 결과·다시 보기 화면 제목 (HTML)
-const recTitle = r => (r.wr ? `라이팅 ${esc(r.wr.title)}` : r.practice ? `빈칸 TEST ${span(r.practice)}` : r.lc ? `리스닝 ${esc(r.lc.title)} · ${lcModName(r.module)}${r.secs ? ` (${esc(lcSecNames(r.secs))})` : ''}`
+const recTitle = r => (r.wr ? `라이팅 ${esc(r.wr.title)}` : r.practice ? `${esc(pracName(r.practice))} TEST ${span(r.practice)}` : r.lc ? `리스닝 ${esc(r.lc.title)} · ${lcModName(r.module)}${r.secs ? ` (${esc(lcSecNames(r.secs))})` : ''}`
   : r.testId != null ? `TEST ${esc(r.testId)} · ${modName(r.module)}${r.secs ? ` (${esc(rcSecNames(r.secs))})` : ''}` : esc(r.label || '기록'));
 const rowLabel = x => (x.t != null ? `T${x.t} ` : '') + `M${x.mi + 1}-${x.n}`;
 
 const keyPre = (mi, set) => (set.kp != null ? set.kp : mi);
-function keysOfSet(mi, set) { return set.type === 'words' ? blanksOf(set).map(b => keyPre(mi, set) + '-' + b.n) : set.questions.map(q => mi + '-' + q.n); }
+function keysOfSet(mi, set) { return set.type === 'words' ? blanksOf(set).map(b => keyPre(mi, set) + '-' + b.n) : set.questions.map(q => keyPre(mi, set) + '-' + q.n); }
 function rangeOf(set) { const ns = set.type === 'words' ? blanksOf(set).map(b => b.n) : set.questions.map(q => q.n); return (set.t != null ? `T${set.t} ` : '') + (ns.length > 1 ? `${ns[0]}–${ns[ns.length - 1]}` : `${ns[0]}`); }
-// 고른 범위 안에서 열린 회차의 빈칸 지문 수와 빈칸 수 (회차 목록의 요약으로 계산)
-function wordsCount(from, to) {
+// 고른 범위 안에서 열린 회차의 그 섹션 지문 수와 문항 수 (회차 목록의 요약으로 계산). 빈칸 지문은 10칸씩이다
+function wordsCount(from, to, sec) {
   const ts = S.tests.filter(t => t.id >= from && t.id <= to);
-  const blanks = ts.reduce((n, t) => n + t.modules.reduce((k, m) => k + m.words, 0), 0);
-  return { tests: ts.length, paras: Math.round(blanks / 10), blanks };
+  if (sec === 'words') { const blanks = ts.reduce((n, t) => n + t.modules.reduce((k, m) => k + m.words, 0), 0); return { tests: ts.length, paras: Math.round(blanks / 10), items: blanks }; }
+  const c = ts.reduce((n, t) => t.modules.reduce((k, m) => { const x = m[sec] || [0, 0]; return [k[0] + x[0], k[1] + x[1]]; }, n), [0, 0]);
+  return { tests: ts.length, paras: c[0], items: c[1] };
 }
 
 /* ---------- 입장 ---------- */
@@ -154,14 +158,14 @@ function startModule(mi) {
   S.exam = { test, showAnswers: S.pick.showAnswers, mod: mi, secs, set: 0, answers: {}, startedAt: Date.now(), limit, endsAt: limit > 0 ? Date.now() + limit * 60000 : null, used: [] };
   persist(); S.screen = 'exam'; S.modal = null; render(); window.scrollTo(0, 0);
 }
-// 빈칸 모아 풀기: 고른 범위의 빈칸 지문만 받아 모듈 하나짜리 시험처럼 푼다.
+// 모아 풀기: 고른 범위에서 한 섹션(빈칸 · Daily Life · Academic) 지문만 받아 모듈 하나짜리 시험처럼 푼다.
 async function startWords() {
-  const { from, to } = wordsRange(), limit = Math.max(0, Math.min(300, Number(WR.lim) || 0));
+  const { from, to } = wordsRange(), sec = pracSec(), limit = pracLim(sec);
   S.busy = 'words'; S.err = ''; render();
   try {
-    const j = await api('getWords', Object.assign(me(), { from, to }));
-    const sets = j.sets.map(s => ({ type: 'words', start: s.start, text: s.text, t: s.t, mi: s.mi, kp: s.t + '-' + s.mi }));
-    S.exam = { kind: 'words', from, to, test: { id: span({ from, to }), modules: [{ name: '빈칸 모음', sets }] },
+    const j = await api('getWords', Object.assign(me(), { from, to, sec }));
+    const sets = j.sets.map(s => Object.assign({}, s, { type: s.type === 'read' ? 'read' : 'words', kp: s.t + '-' + s.mi }));
+    S.exam = { kind: 'words', from, to, sec, test: { id: span({ from, to }), modules: [{ name: `${PRAC_NAME[sec]} 모음`, sets }] },
       mod: 0, set: 0, answers: {}, startedAt: Date.now(), limit, endsAt: limit > 0 ? Date.now() + limit * 60000 : null, used: [] };
     persist(); S.pick = null; S.screen = 'exam'; S.busy = ''; render(); window.scrollTo(0, 0);
   } catch (e) { S.err = e.message; S.busy = ''; render(); }
@@ -195,7 +199,7 @@ async function finish() {
   const words = e.kind === 'words', lc = e.kind === 'lc', wr = e.kind === 'wr';
   const who = { name: S.name.trim(), period: S.period, cls: S.cls };
   const body = Object.assign(wr ? { code: S.code.trim(), id: e.test.id, answers: wrAnswers(e), used: e.used, startedAt: e.startedAt } : words
-    ? { code: S.code.trim(), from: e.from, to: e.to, limit: e.limit, answers: e.answers, used: e.used, startedAt: e.startedAt }
+    ? { code: S.code.trim(), from: e.from, to: e.to, sec: e.sec || 'words', limit: e.limit, answers: e.answers, used: e.used, startedAt: e.startedAt }
     : { code: S.code.trim(), id: e.test.id, module: e.both ? 'both' : e.mod, limit: e.limit, answers: e.answers, used: e.used, startedAt: e.startedAt }, who, { attempt: e.attempt }, e.secs ? { secs: e.secs } : {});
   let j = null, err = '';
   for (let i = 0; i < 3 && !j; i++) {
@@ -277,7 +281,7 @@ function viewHome() {
     <section class="hero"><h1>${esc(S.name)} 님, 회차를 골라 주세요</h1>
       <p>${tab === 'wr' ? '재배열 10문항(6분 50초), 이메일(7분), 토론(10분)을 차례로 풀어요. 재배열은 자동으로 채점되고, 이메일·토론 글은 선생님께 전달돼요.'
         : lcTab ? '회차를 고른 뒤 Module 1과 Module 2 중 하나를 골라 풀어요. 음원은 한 번만 나오고, 문제는 하나씩 정해진 시간 안에 풀어요. 끝나면 점수가 선생님께 자동으로 전달돼요.'
-        : '회차를 고른 뒤 Module 1과 Module 2 중 하나를 골라 풀어요. Complete the Words · Daily Life · Academic Passage 중 원하는 섹션만 골라 풀 수도 있어요. 빈칸 문제는 빠진 글자만 입력하세요. 끝나면 점수가 선생님께 자동으로 전달돼요.'}</p></section>
+        : '회차를 고른 뒤 Module 1과 Module 2 중 하나를 골라 풀어요. 「모아 풀기」로 여러 회차의 빈칸 · Daily Life · Academic 지문만 모아 풀 수도 있어요. 빈칸 문제는 빠진 글자만 입력하세요. 끝나면 점수가 선생님께 자동으로 전달돼요.'}</p></section>
     ${S.exam && S.exam.done ? `<div class="banner warn">보내지 못한 답안이 있어요. 다른 시험을 시작하면 그 답안은 사라져요. <button class="btn small" data-act="retry">다시 보내기</button></div>` : ''}
     <div class="tabs" role="tablist">${[['rc', '리딩'], ['lc', '리스닝'], ['wr', '라이팅']].map(([k, l]) => `<button class="tab${tab === k ? ' on' : ''}" data-act="tab" data-tab="${k}" role="tab" aria-selected="${tab === k}">${l}</button>`).join('')}</div>
     ${S.err ? `<div class="banner bad">${esc(S.err)}</div>` : ''}
@@ -305,13 +309,13 @@ function viewMine() {
 
 // 시험 화면 한 장: 빈칸은 지문 하나, 리딩은 실제 시험처럼 문제 하나 (지문은 문제마다 같이 보여 준다)
 function pagesOf(m) { return m.sets.flatMap(s => (s.type === 'words' ? [{ s }] : s.questions.map(q => ({ s, q })))); }
-function keysOfPage(mi, p) { return p.q ? [mi + '-' + p.q.n] : keysOfSet(mi, p.s); }
+function keysOfPage(mi, p) { return p.q ? [keyPre(mi, p.s) + '-' + p.q.n] : keysOfSet(mi, p.s); }
 // 문장 넣기 문제에서만 ■ 자리를 고를 수 있게 하고, 같은 지문의 다른 문제에서는 ■ 표시를 지운다.
 function renderPassage(set, mi, q) {
   let i = 0;
   const html = set.passage.split(/\n\n/).map(p => {
     let h = esc(p).replace(/\n/g, '<br>');
-    h = q.insert ? h.replace(/■/g, () => { const L = LET[i++], k = mi + '-' + q.n;
+    h = q.insert ? h.replace(/■/g, () => { const L = LET[i++], k = keyPre(mi, set) + '-' + q.n;
       return `<button class="ins${S.exam.answers[k] === L ? ' on' : ''}" data-act="pick" data-k="${k}" data-v="${L}" aria-label="위치 ${L}">■ ${L}</button>`; })
       : h.replace(/ ?■ ?/g, ' ').replace(/ {2,}/g, ' ').trim();
     return `<p>${h}</p>`;
@@ -319,7 +323,7 @@ function renderPassage(set, mi, q) {
   return `<div class="sheet passage">${set.title ? `<h3>${esc(set.title)}</h3>` : ''}${html}</div>`;
 }
 function renderQuestion(set, mi, q) {
-  const k = mi + '-' + q.n, cur = S.exam.answers[k], choices = q.insert ? LET.map(L => `위치 ■ ${L}`) : q.c;
+  const k = keyPre(mi, set) + '-' + q.n, cur = S.exam.answers[k], choices = q.insert ? LET.map(L => `위치 ■ ${L}`) : q.c;
   return `<div class="sheet qs"><fieldset><legend><span class="num">${q.n}.</span>${q.insert ? '다음 문장이 들어갈 가장 알맞은 위치를 고르세요.' : esc(q.q)}</legend>
     ${q.insert ? `<div class="insert-sent">${esc(q.insert)}</div>` : ''}
     ${choices.map((c, ci) => `<label class="opt"><input type="radio" name="q${k}" data-k="${k}" value="${LET[ci]}"${cur === LET[ci] ? ' checked' : ''}><b>(${LET[ci]})</b><span>${esc(c)}</span></label>`).join('')}</fieldset></div>`;
@@ -331,18 +335,20 @@ function renderWords(set, mi) {
     return `<span class="wd">${pre}<input class="blank" id="b${k}" data-k="${k}" data-len="${len}" maxlength="${len}" style="--n:${len}" value="${esc(S.exam.answers[k] || '')}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="빈칸 ${n}, ${len}글자"></span>`; });
   return `<div class="sheet words">${html}</div>`;
 }
-// 빈칸만 모아 풀기: 회차 범위와 제한 시간(기본 0 = 제한 없음)을 고른다.
+// 모아 풀기: 섹션(빈칸 · Daily Life · Academic), 회차 범위, 제한 시간(기본 0 = 제한 없음)을 고른다.
+const PRAC_DESC = { words: 'Complete the Words', daily: 'Read in Daily Life', academic: 'Read an Academic Passage' };
 function viewWordsCard() {
-  const { from, to } = wordsRange(), c = wordsCount(from, to), lim = Number(WR.lim) || 0;
+  const { from, to } = wordsRange(), sec = pracSec(), c = wordsCount(from, to, sec), lim = pracLim(sec);
   const opts = sel => S.tests.map(t => `<option value="${t.id}"${t.id === sel ? ' selected' : ''}>TEST ${t.id}</option>`).join('');
   return `<section class="sheet stack wcard">
-    <div><h2 style="font-size:18px">빈칸만 모아 풀기</h2>
-      <p class="note" style="margin:4px 0 0">고른 회차들의 Complete the Words 지문만 이어서 풀어요. 기본은 제한 시간 없이 시계가 지난 시간을 세요.</p></div>
+    <div><h2 style="font-size:18px">모아 풀기</h2>
+      <p class="note" style="margin:4px 0 0">고른 회차들에서 한 섹션 지문만 모아 이어서 풀어요. 기본은 제한 시간 없이 시계가 지난 시간을 세요.</p></div>
+    <div class="toolbar" role="group" aria-label="모아 풀 섹션">${['words', 'daily', 'academic'].map(k => `<button class="dchip" data-act="pracSec" data-k="${k}" aria-pressed="${sec === k}">${PRAC_NAME[k]}<span class="sr"> (${PRAC_DESC[k]})</span></button>`).join('')}</div>
     <div class="toolbar"><label class="inline">처음 <select id="wFrom" aria-label="처음 회차">${opts(from)}</select></label>
       <label class="inline">끝 <select id="wTo" aria-label="끝 회차">${opts(to)}</select></label>
-      <span class="note num">${c.tests}회차 · 지문 ${c.paras}개 · 빈칸 ${c.blanks}개</span></div>
-    <label class="field">제한 시간 (분)<span class="inline"><input type="number" class="lim" id="wLim" min="0" max="300" step="1" value="${lim}" aria-label="빈칸 모아 풀기 제한 시간(분)"><span class="note">0이면 제한 없이 풀어요</span></span></label>
-    <div><button class="btn primary" data-act="startWords"${S.busy ? ' disabled' : ''}>${S.busy === 'words' ? '불러오는 중…' : '빈칸 풀기 시작'}</button></div></section>`;
+      <span class="note num">${c.tests}회차 · 지문 ${c.paras}개 · ${sec === 'words' ? '빈칸' : '문제'} ${c.items}개</span></div>
+    <label class="field">제한 시간 (분)<span class="inline"><input type="number" class="lim" id="wLim" min="0" max="300" step="1" value="${lim}" aria-label="${PRAC_NAME[sec]} 모아 풀기 제한 시간(분)"><span class="note">0이면 제한 없이 풀어요</span></span></label>
+    <div><button class="btn primary" data-act="startWords"${S.busy || !c.items ? ' disabled' : ''}>${S.busy === 'words' ? '불러오는 중…' : c.items ? `${PRAC_NAME[sec]} 풀기 시작 · ${c.items}${sec === 'words' ? '칸' : '문제'}` : `이 범위에는 ${PRAC_NAME[sec]} 지문이 없어요`}</button></div></section>`;
 }
 // 모듈과 제한 시간을 고르는 화면. 제한 시간은 모듈 기본값으로 채워지고, 바꾸면 이 기기에 기억된다. 0이면 제한 없이 푼다.
 function viewPick() {
@@ -373,12 +379,13 @@ function viewExam() {
   // 빈칸 모음은 지문이 많아 번호만 보여 주고, 어느 회차·모듈인지는 툴팁으로 알려 준다.
   const dots = pages.map((pg, i) => { const done = keysOfPage(e.mod, pg).every(k => (e.answers[k] || '').trim());
     const label = e.kind === 'words' ? `${i + 1}` : pg.q ? `${pg.q.n}` : rangeOf(pg.s);
-    const full = e.kind === 'words' ? `TEST ${pg.s.t} Module ${pg.s.mi + 1} ${rangeOf(pg.s).replace(/^T\d+ /, '')}` : `문제 ${label}`;
+    const full = e.kind === 'words' ? `TEST ${pg.s.t} Module ${pg.s.mi + 1} ${pg.q ? `Question ${pg.q.n}` : rangeOf(pg.s).replace(/^T\d+ /, '')}` : `문제 ${label}`;
     return `<button class="dot${done ? ' done' : ''}${i === pi ? ' cur' : ''}" data-act="go" data-i="${i}" aria-label="${full}" title="${full}">${label}</button>`; }).join('');
   const body = set.type === 'words' ? renderWords(set, e.mod) : `<div class="split">${renderPassage(set, e.mod, p.q)}${renderQuestion(set, e.mod, p.q)}</div>`;
   const keys = m.sets.flatMap(s => keysOfSet(e.mod, s)), total = keys.length, pk = keysOfPage(e.mod, p), pos = k => keys.indexOf(k) + 1;
   // 섹션만 골라 풀면 원래 문항 번호와 함께 이번에 푸는 문항 중 몇 번째인지 보여 준다
-  const where = e.kind === 'words' ? `지문 ${pi + 1} / ${pages.length} · TEST ${set.t} Module ${set.mi + 1} · ${blanksOf(set)[0].n}–${blanksOf(set).slice(-1)[0].n}번`
+  const where = e.kind === 'words' ? (p.q ? `TEST ${set.t} Module ${set.mi + 1} · Question ${p.q.n} · ${pos(pk[0])}/${total}`
+      : `지문 ${pi + 1} / ${pages.length} · TEST ${set.t} Module ${set.mi + 1} · ${blanksOf(set)[0].n}–${blanksOf(set).slice(-1)[0].n}번`)
     : e.secs ? (p.q ? `Question ${p.q.n} · ${pos(pk[0])}/${total}` : `Questions ${rangeOf(set)} · ${pos(pk[0])}–${pos(pk[pk.length - 1])}/${total}`)
     : p.q ? `Question ${p.q.n} of ${total}` : `Questions ${rangeOf(set)} of ${total}`;
   return `<div class="qhead"><h2>${set.type === 'words' ? 'Fill in the missing letters in the paragraph' : esc(set.kind)}</h2><span class="note num">${where}</span></div>
@@ -389,7 +396,7 @@ function viewExam() {
 
 function scoreBlock(r) {
   return `<div class="score"><div><div class="eyebrow">총점</div><div class="big">${r.score}<small>/${r.total}</small></div></div>
-    <div class="parts">${['0w', '0r', '1w', '1r', 'w', 'build', 'resp', 'conv', 'ann', 'talk'].filter(k => r.parts[k]).map(k => `<div class="part"><div class="lbl">${PART_LABEL[k] || LC_PART[k]}</div><div class="val">${r.parts[k][0]}/${r.parts[k][1]}</div></div>`).join('')}</div></div>`;
+    <div class="parts">${['0w', '0r', '1w', '1r', 'w', 'd', 'a', 'build', 'resp', 'conv', 'ann', 'talk'].filter(k => r.parts[k]).map(k => `<div class="part"><div class="lbl">${PART_LABEL[k] || LC_PART[k]}</div><div class="val">${r.parts[k][0]}/${r.parts[k][1]}</div></div>`).join('')}</div></div>`;
 }
 function reviewTable(r, onlyWrong, showAnswers) {
   const rows = r.rows.filter(x => !onlyWrong || !x.ok);
@@ -488,6 +495,7 @@ document.addEventListener('click', ev => {
   if (act === 'start') startTest(+b.dataset.id);
   else if (act === 'startMod') startModule(+b.dataset.mi);
   else if (act === 'startWords') startWords();
+  else if (act === 'pracSec') { WR.sec = b.dataset.k; lsSet(':wr', WR); render(); }
   else if (act === 'go') goSet(+b.dataset.i);
   else if (act === 'askSubmit') { S.modal = { kind: 'submit' }; render(); }
   else if (act === 'submit') submitModule();
@@ -516,7 +524,7 @@ document.addEventListener('input', ev => {
   if (el.id === 'clsText') { S.cls = el.value; return; }
   if (el.id === 'code') { S.code = el.value; return; }
   // 제한 시간은 치는 동안에도 기억해 둔다 (내 기록을 받아 화면을 다시 그려도 친 값이 남게)
-  if (el.id === 'wLim') { WR.lim = Math.max(0, Math.min(300, Number(el.value) || 0)); lsSet(':wr', WR); return; }
+  if (el.id === 'wLim') { setPracLim(pracSec(), Math.max(0, Math.min(300, Number(el.value) || 0))); return; }
   if (el.classList.contains('lim') && S.pick && el.dataset.lk) { LIM[el.dataset.lk] = Math.max(0, Math.min(120, Number(el.value) || 0)); lsSet(':lim', LIM); return; }
   if (el.classList.contains('blank') && el.dataset.k && S.exam) {
     el.value = el.value.replace(/[^A-Za-z]/g, '').toLowerCase();
@@ -548,7 +556,7 @@ document.addEventListener('change', ev => {
     lsSet(':wr', WR); render();
   } else if (el.id === 'wLim') {
     const v = Math.max(0, Math.min(300, Number(el.value) || 0)); el.value = v;
-    WR.lim = v; lsSet(':wr', WR);
+    setPracLim(pracSec(), v);
   } else if (el.classList.contains('lim') && S.pick && el.dataset.lk) {
     const v = Math.max(0, Math.min(120, Number(el.value) || 0)); el.value = v;
     LIM[el.dataset.lk] = v; lsSet(':lim', LIM);
