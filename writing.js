@@ -62,13 +62,13 @@ function viewWrExam() {
     const line = b.slots.map(x => {
       if (x.w != null) return `<span class="wrfix">${esc(x.w)}${esc(x.end)}</span>`;
       const i = bi++, v = pick[i];
-      return v == null ? `<span class="wrslot empty" aria-label="빈칸 ${i + 1}">&nbsp;</span>${esc(x.end)}`
-        : `<button class="wrslot" data-act="wrUnpick" data-i="${i}" aria-label="빈칸 ${i + 1}: ${esc(b.bank[v])} (누르면 빼기)">${esc(b.bank[v])}</button>${esc(x.end)}`;
+      return v == null ? `<span class="wrslot empty" data-slot="${i}" aria-label="빈칸 ${i + 1}">&nbsp;</span>${esc(x.end)}`
+        : `<button class="wrslot" data-act="wrUnpick" data-i="${i}" data-slot="${i}" aria-label="빈칸 ${i + 1}: ${esc(b.bank[v])} (누르면 빼기)">${esc(b.bank[v])}</button>${esc(x.end)}`;
     }).join(' ');
     const dots = t.build.map((x, i) => { const p = e.pick[x.n] || []; const full = p.length && p.filter(v => v != null).length === x.slots.filter(s => s.w == null).length;
       return `<button class="dot${full ? ' done' : ''}${i === e.item ? ' cur' : ''}" data-act="wrItem" data-i="${i}">${x.n}</button>`; }).join('');
     return `<div class="stack">${head}
-      <p class="note" style="margin:0">Make an appropriate sentence. 아래 조각을 순서대로 눌러 빈칸을 채우세요. 채운 조각을 누르면 빠져요. 쓰지 않는 조각도 있어요.</p>
+      <p class="note" style="margin:0">Make an appropriate sentence. 아래 조각을 끌어서 빈칸에 놓으세요. 채운 조각은 다른 빈칸으로 끌어 자리를 바꾸거나, 아래로 끌어 빼요. 눌러서 채우고 빼도 돼요. 쓰지 않는 조각도 있어요.</p>
       <div class="sheet stack wrbuild"><div class="wrctx"><span class="who">A</span><p>${esc(b.ctx)}</p></div>
         <div class="wrctx me"><span class="who">B</span><p class="wrline">${line}</p></div>
         <div class="wrbank">${b.bank.map((w, i) => `<button class="wrchip" data-act="wrPick" data-i="${i}"${used.has(i) ? ' disabled' : ''}>${esc(w)}</button>`).join('')}</div>
@@ -83,13 +83,58 @@ function viewWrExam() {
   return `<div class="stack">${head}${body}<div class="toolbar"><span class="spacer"></span>${next}</div></div>`;
 }
 
+// 지금 문항의 빈칸마다 고른 조각 번호 (처음이면 빈 배열을 만든다)
+function wrPickOf(e) {
+  const item = e.test.build[e.item]; if (!item) return null;
+  return e.pick[item.n] || (e.pick[item.n] = Array(item.slots.filter(x => x.w == null).length).fill(null));
+}
+// 끌어 놓기 (실제 시험처럼): 아래 조각 → 빈칸(차 있으면 바꿔 넣기), 빈칸 조각 → 다른 빈칸(자리 바꾸기) 또는 아래 조각 칸(빼기).
+// 마우스·손가락 모두 pointer 이벤트로 받는다. 6px 넘게 움직여야 끌기로 보고, 그보다 덜 움직이면 원래대로 누르기(click)다.
+// WD: { id: 끄는 손가락·마우스의 pointerId, from: 'bank' | 'slot', i, x, y, el, ghost, over } — 다른 손가락은 무시한다. wrSkip: 끌기를 끝낸 그 마우스 동작이 만드는 click만 무시한다 (같은 입력 처리 안에서 오므로 setTimeout 0이면 풀린다)
+let WD = null, wrSkip = false;
+const wrDragEnd = () => { const d = WD; WD = null; if (!d || !d.ghost) return null;
+  d.ghost.remove(); d.el.classList.remove('wrdragging'); if (d.over) d.over.classList.remove('wrover');
+  wrSkip = true; setTimeout(() => { wrSkip = false; }, 0); return d; };
+document.addEventListener('pointerdown', ev => {
+  const e = S.exam; if (WD || !e || e.kind !== 'wr' || S.screen !== 'exam' || e.part !== 0 || ev.button > 0) return;
+  const el = ev.target.closest('.wrchip:not(:disabled), button.wrslot'); if (!el) return;
+  WD = { id: ev.pointerId, from: el.classList.contains('wrchip') ? 'bank' : 'slot', i: +el.dataset.i, x: ev.clientX, y: ev.clientY, el, ghost: null, over: null };
+});
+document.addEventListener('pointermove', ev => {
+  if (!WD || ev.pointerId !== WD.id) return;
+  if (!WD.ghost) {
+    if (Math.hypot(ev.clientX - WD.x, ev.clientY - WD.y) < 6) return;
+    const g = WD.ghost = WD.el.cloneNode(true);
+    g.className = 'wrchip wrghost'; g.removeAttribute('data-act'); g.setAttribute('aria-hidden', 'true'); document.body.appendChild(g);
+    WD.el.classList.add('wrdragging');
+  }
+  ev.preventDefault();
+  WD.ghost.style.transform = `translate(${ev.clientX}px, ${ev.clientY}px) translate(-50%, -50%)`;
+  const hit = document.elementFromPoint(ev.clientX, ev.clientY), t = hit && hit.closest(WD.from === 'slot' ? '.wrbuild [data-slot], .wrbank' : '.wrbuild [data-slot]');
+  if (WD.over !== t) { if (WD.over) WD.over.classList.remove('wrover'); WD.over = t; if (t) t.classList.add('wrover'); }
+}, { passive: false });
+document.addEventListener('pointerup', ev => {
+  if (!WD || ev.pointerId !== WD.id) return;
+  const d = wrDragEnd(), e = S.exam; if (!d || !d.over || !e || e.kind !== 'wr' || e.part !== 0) return;
+  const pick = wrPickOf(e), t = d.over;
+  if (!t.isConnected || !d.el.isConnected) return;  // 끄는 사이에 화면이 바뀌었다 (시간이 다 돼 다음 파트로 넘어감 등)
+  if (t.dataset.slot != null) {
+    const j = +t.dataset.slot;
+    if (d.from === 'bank') pick[j] = d.i;
+    else if (j !== d.i) { const v = pick[j]; pick[j] = pick[d.i]; pick[d.i] = v; }
+  } else if (d.from === 'slot') pick[d.i] = null;
+  persist(); render();
+});
+document.addEventListener('pointercancel', ev => { if (WD && ev.pointerId === WD.id) wrDragEnd(); });
+
 document.addEventListener('click', ev => {
   const b = ev.target.closest('[data-act]'); if (!b) return;
   const act = b.dataset.act;
   if (act === 'wrStart') { startWr(+b.dataset.id); return; }
   const e = S.exam; if (!e || e.kind !== 'wr' || S.screen !== 'exam') return;
+  if ((act === 'wrPick' || act === 'wrUnpick') && wrSkip) return;  // 끌어 놓은 뒤 따라오는 click
   const item = e.test.build[e.item], blanks = item ? item.slots.filter(x => x.w == null).length : 0;
-  const pick = item && (e.pick[item.n] || (e.pick[item.n] = Array(blanks).fill(null)));
+  const pick = wrPickOf(e);
   if (act === 'wrPick') { const i = pick.indexOf(null); if (i >= 0) pick[i] = +b.dataset.i; persist(); render(); }
   else if (act === 'wrUnpick') { pick[+b.dataset.i] = null; persist(); render(); }
   else if (act === 'wrClear') { e.pick[item.n] = Array(blanks).fill(null); persist(); render(); }

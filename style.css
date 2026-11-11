@@ -162,6 +162,13 @@ button.ins.on { background: var(--accent); color: var(--accent-ink); }
 .wrchip { font: inherit; font-size: 16px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--ink); cursor: pointer; }
 .wrchip:hover:not(:disabled) { border-color: var(--accent); }
 .wrchip:disabled { opacity: .3; cursor: default; }
+/* 끌어 놓기: 손가락으로 끌 때 화면이 같이 움직이지 않게, 마우스로 끌 때 글자가 선택되지 않게 */
+.wrbuild { user-select: none; -webkit-user-select: none; }
+.wrchip:not(:disabled), button.wrslot { touch-action: none; cursor: grab; }
+.wrghost { position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none; border-color: var(--accent); box-shadow: 0 6px 18px rgba(0, 0, 0, .18); }
+.wrdragging { opacity: .35; }
+.wrslot.wrover { border-color: var(--accent); border-style: solid; background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent); }
+.wrbank.wrover { background: var(--accent-soft); border-radius: 8px; }
 .wrq { margin: 0; white-space: pre-line; line-height: 1.7; }
 .wrpost { border-left: 3px solid var(--line); padding: 4px 12px; }
 .wrpost.prof { border-left-color: var(--accent); }
