@@ -1,7 +1,7 @@
 /* 라이팅: NEW TOEFL 3 라이팅 회차 = 재배열(Build a Sentence) 10문항 → 이메일 → 토론. 파트마다 제한 시간이 있고, 시간이 끝나면 다음 파트로 넘어간다.
    재배열만 서버가 채점하고, 이메일·토론 글은 제출해 선생님이 관리자 화면에서 읽는다. 정답 공개면 결과에 모범 답안이 나온다.
    S.exam = { kind: 'wr', test, part: 0|1|2, item, pick: { 문항 번호: [빈칸마다 고른 조각 번호 또는 null] }, email, disc, partEnds, partStart, startedAt, used: [초, 초, 초], ask } */
-const WR_PARTS = [['재배열', 6], ['이메일', 7], ['토론', 10]];  // 파트 이름, 제한 시간(분)
+const WR_PARTS = [['재배열', 410], ['이메일', 420], ['토론', 600]];  // 파트 이름, 제한 시간(초): 6분 50초, 7분, 10분
 const wrWords = s => (String(s || '').trim().match(/\S+/g) || []).length;
 
 function viewWrList() {
@@ -9,7 +9,7 @@ function viewWrList() {
   if (!tests.length) return `<div class="banner">지금 열려 있는 라이팅 회차가 없어요. 선생님께 문의하세요.</div>`;
   const all = mineList(), best = id => bestText(all && all.filter(a => a.wr && a.wr.id === id), () => '재배열 ');
   return `<section class="tests">${tests.map(t => `<article class="tcard"><h3>${esc(t.title)}</h3>
-    <dl>${WR_PARTS.map(([l, min], i) => `<dt>${l}</dt><dd>${i === 0 ? `${t.build}문항 · ` : ''}${min}분</dd>`).join('')}</dl>
+    <dl>${WR_PARTS.map(([l, sec], i) => `<dt>${l}</dt><dd>${i === 0 ? `${t.build}문항 · ` : ''}${fmtMin(sec / 60)}</dd>`).join('')}</dl>
     <div class="best">${best(t.id)}</div>
     <button class="btn primary" data-act="wrStart" data-id="${t.id}"${S.busy ? ' disabled' : ''}>${S.busy === 'wr' + t.id ? '불러오는 중…' : '시작'}</button></article>`).join('')}</section>`;
 }
@@ -18,7 +18,7 @@ async function startWr(id) {
   try {
     const j = await api('getWriting', Object.assign(me(), { id }));
     const now = Date.now();
-    S.exam = { kind: 'wr', test: j.test, showAnswers: j.showAnswers, part: 0, item: 0, pick: {}, email: '', disc: '', startedAt: now, partStart: now, partEnds: now + WR_PARTS[0][1] * 60000, used: [] };
+    S.exam = { kind: 'wr', test: j.test, showAnswers: j.showAnswers, part: 0, item: 0, pick: {}, email: '', disc: '', startedAt: now, partStart: now, partEnds: now + WR_PARTS[0][1] * 1000, used: [] };
     persist(); S.screen = 'exam'; window.scrollTo(0, 0);
   } catch (e) { S.err = e.message; }
   S.busy = ''; render();
@@ -29,7 +29,7 @@ function wrNextPart() {
   const now = Date.now();
   e.used[e.part] = Math.round((now - e.partStart) / 1000); e.ask = false;
   if (e.part >= WR_PARTS.length - 1) { persist(); finish(); return; }
-  e.part++; e.item = 0; e.partStart = now; e.partEnds = now + WR_PARTS[e.part][1] * 60000;
+  e.part++; e.item = 0; e.partStart = now; e.partEnds = now + WR_PARTS[e.part][1] * 1000;
   persist(); render(); window.scrollTo(0, 0);
 }
 // 제출할 답: 재배열은 빈칸 순서대로 고른 조각의 글자
