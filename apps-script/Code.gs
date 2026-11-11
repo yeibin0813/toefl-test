@@ -11,6 +11,9 @@ const LC_FOLDER = '토플 리스닝 음원';
 const LC_SET_NAME = { new: 'NEW TOEFL 3', tpo: 'TPO' };
 // 리스닝 섹션 이름 (학생이 섹션만 골라 풀 때 기록에 붙인다)
 const LC_TYPE_NAME = { response: 'Best Response', conversation: 'Conversation', announcement: 'Announcement', talk: 'Academic Talk' };
+// 리딩 섹션: 빈칸(Complete the Words), 일상 글(Read in Daily Life), 학술 지문(Read an Academic Passage). 학생 페이지 review.js의 RC_SEC와 같다
+const RC_SEC_NAME = { words: 'Complete the Words', daily: 'Daily Life', academic: 'Academic Passage' };
+const rcSecOf_ = set => (set.type === 'words' ? 'words' : /academic/i.test(set.kind || '') ? 'academic' : 'daily');
 const DEFAULT_PW = 'toefl1234';
 const RESULT_HEADERS = ['제출 시각', '이름', '회차', '총점', '만점', 'M1 단어', 'M1 리딩', 'M2 단어', 'M2 리딩',
   '소요 시간 (M1 + M2)', '틀린 문항', '틀린 답 → 정답', '상세 (JSON)', '기록 ID', '기간', '반'];
@@ -55,11 +58,11 @@ const API = {
     checkCode_(r.code);
     const t = loadTest_(r.id);
     if (!t) throw new Error('회차를 찾을 수 없어요.');
-    // module: 0 또는 1이면 그 모듈만 채점, 없으면 전체
-    const mi = (r.module === 0 || r.module === 1) ? r.module : null;
-    const g = grade_(t, r.answers || {}, mi);
+    // module: 0 또는 1이면 그 모듈만 채점, 없으면 전체. secs가 있으면 그 섹션 지문만 채점한다
+    const mi = (r.module === 0 || r.module === 1) ? r.module : null, secs = rcSecs_(t, mi, r.secs);
+    const g = grade_(t, r.answers || {}, mi, secs);
     const rec = {
-      id: newId_(), name: clip_(r.name, 60), period: clip_(r.period, 40), cls: clip_(r.cls, 60), testId: t.id, module: mi, limit: Math.max(0, Number(r.limit) || 0),
+      id: newId_(), name: clip_(r.name, 60), period: clip_(r.period, 40), cls: clip_(r.cls, 60), testId: t.id, module: mi, secs, limit: Math.max(0, Number(r.limit) || 0),
       finishedAt: Date.now(), used: (r.used || []).map(Number),
       score: g.score, total: g.total, parts: g.parts, rows: g.rows
     };
@@ -827,10 +830,17 @@ function gradeLc_(t, answers, mi, secs) {
 }
 
 // ---------- 채점 ----------
-// only가 0 또는 1이면 그 모듈만 채점한다.
-function grade_(t, answers, only) {
+// 리딩에서 고른 섹션: 채점할 모듈에 있는 섹션만 남긴다. 없거나 전부면 null (모듈 전체)
+function rcSecs_(t, mi, raw) {
+  if (!Array.isArray(raw)) return null;
+  const sets = t.modules.filter((m, i) => mi == null || i === mi).flatMap(m => m.sets);
+  const present = Object.keys(RC_SEC_NAME).filter(k => sets.some(s => rcSecOf_(s) === k)), chosen = present.filter(k => raw.includes(k));
+  return !chosen.length || chosen.length === present.length ? null : chosen;
+}
+// only가 0 또는 1이면 그 모듈만 채점한다. secs가 있으면 그 섹션 지문만.
+function grade_(t, answers, only, secs) {
   const rows = [], parts = {};
-  t.modules.forEach((m, mi) => (only != null && mi !== only) ? null : m.sets.forEach(set => {
+  t.modules.forEach((m, mi) => (only != null && mi !== only) ? null : m.sets.filter(set => !secs || secs.includes(rcSecOf_(set))).forEach(set => {
     if (set.type === 'words') blanks_(set).forEach(b => {
       const k = mi + '-' + b.n;
       rows.push({ k, mi, n: b.n, kind: 'w', given: String(answers[k] || ''), correct: b.ans, full: b.full, ok: blankOk_(b, answers[k]) });
@@ -885,7 +895,7 @@ function appendResult_(rec) {
     const label = rec.wr ? '라이팅 ' + rec.wr.title
       : rec.practice ? '빈칸 TEST ' + rec.practice.from + (rec.practice.to !== rec.practice.from ? '-' + rec.practice.to : '')
       : rec.lc ? '리스닝 ' + rec.lc.title + (rec.module != null ? ' M' + (rec.module + 1) : '') + (rec.secs ? ' (' + rec.secs.map(s => LC_TYPE_NAME[s]).join(' · ') + ')' : '')
-      : 'TEST ' + rec.testId + (rec.module != null ? ' M' + (rec.module + 1) : '');
+      : 'TEST ' + rec.testId + (rec.module != null ? ' M' + (rec.module + 1) : '') + (rec.secs ? ' (' + rec.secs.map(s => RC_SEC_NAME[s]).join(' · ') + ')' : '');
     const where = x => (x.t != null ? 'T' + x.t + ' ' : '') + 'M' + (x.mi + 1) + '-' + x.n;
     const wrong = rec.rows.filter(x => !x.ok);
     const sheet = sheet_(SH.results);
@@ -920,14 +930,17 @@ function who_(r) {
 }
 function mine_(who, name, cls) { const c = norm_(cls); return norm_(name) === who.name && (c === who.cls || !c); }
 function time_(v) { return v instanceof Date ? v.getTime() : Number(v) || 0; }
-// 결과 시트의 회차 칸("TEST 5 M1", "빈칸 TEST 1-10", "리스닝 NEW TOEFL 3 TEST 1 M2 (Best Response · Conversation)")에서 기록 종류를 읽는다
+// 결과 시트의 회차 칸("TEST 5 M1", "TEST 5 M1 (Daily Life · Academic Passage)", "빈칸 TEST 1-10", "리스닝 NEW TOEFL 3 TEST 1 M2 (Best Response · Conversation)")에서 기록 종류를 읽는다
 // 리스닝 Module 1 + 2 이어 풀기는 M이 없다 ("리스닝 NEW TOEFL 3 TEST 1 (Conversation)")
 function labelInfo_(label) {
   const s = String(label == null ? '' : label).trim(), out = { testId: null, module: null, practice: null, lc: null, secs: null, wr: null };
   let m;
   if ((m = s.match(/^라이팅 (NEW TOEFL 3 TEST (\d+))$/))) return Object.assign(out, { wr: { id: +m[2], title: m[1] } });
   if ((m = s.match(/^빈칸 TEST (\d+)(?:-(\d+))?$/))) return Object.assign(out, { practice: { from: +m[1], to: +(m[2] || m[1]) } });
-  if ((m = s.match(/^TEST (\d+)(?: M([12]))?$/))) return Object.assign(out, { testId: +m[1], module: m[2] ? m[2] - 1 : null });
+  if ((m = s.match(/^TEST (\d+)(?: M([12]))?(?: \((.+)\))?$/))) {
+    const secs = m[3] ? m[3].split(' · ').map(x => Object.keys(RC_SEC_NAME).find(k => RC_SEC_NAME[k] === x)).filter(Boolean) : [];
+    return Object.assign(out, { testId: +m[1], module: m[2] ? m[2] - 1 : null, secs: secs.length ? secs : null });
+  }
   if ((m = s.match(/^리스닝 (.+? TEST \d+)(?: M([12]))?(?: \((.+)\))?$/))) {
     // 이름을 NEW TOEFL 3으로 바꾸기 전에는 새 문제집 회차 제목이 "새 TEST 1"이었다
     const title = m[1], names = [[LC_SET_NAME.new, 'new'], [LC_SET_NAME.tpo, 'tpo'], ['새', 'new']];
