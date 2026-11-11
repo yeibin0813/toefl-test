@@ -5,7 +5,7 @@
 // 입장 코드가 맞는 학생에게만 이 서버가 꺼내 보낸다.
 // 리스닝 해설(문항별 해설·해석과 묶음별 스크립트·해석)은 "리스닝해설" 시트에 회차마다 한 줄로 있고, 정답 공개일 때 다시 보기에서만 보낸다.
 
-const SH = { settings: '설정', tests: '문제', results: '결과', lc: '리스닝', lcx: '리스닝해설' };
+const SH = { settings: '설정', tests: '문제', results: '결과', lc: '리스닝', lcx: '리스닝해설', wr: '라이팅' };
 const LC_FOLDER = '토플 리스닝 음원';
 // 리스닝 세트 이름. 회차 제목은 저장된 값 대신 늘 "세트 이름 + TEST 번호"로 만든다 (예: NEW TOEFL 3 TEST 1).
 const LC_SET_NAME = { new: 'NEW TOEFL 3', tpo: 'TPO' };
@@ -42,7 +42,8 @@ const API = {
   enter(r) {
     checkCode_(r.code);
     const open = openNow_(r);
-    return { tests: allTests_().filter(t => rcOpen_(open, t.id)).map(testSummary_), lcTests: allLc_().filter(t => lcOpen_(open, t)).map(lcSummary_) };
+    return { tests: allTests_().filter(t => rcOpen_(open, t.id)).map(testSummary_), lcTests: allLc_().filter(t => lcOpen_(open, t)).map(lcSummary_),
+      wrTests: allWr_().filter(t => wrOpen_(open, t.id)).map(wrSummary_) };
   },
   getTest(r) {
     checkCode_(r.code);
@@ -117,6 +118,29 @@ const API = {
     return saveResult_(rec, r.attempt, lcOpen_(openNow_(r), t));
   },
 
+  // ---------- 라이팅 ----------
+  getWriting(r) {
+    checkCode_(r.code);
+    const t = loadWr_(r.id), open = openNow_(r);
+    if (!t || !wrOpen_(open, t.id)) throw new Error('지금은 열려 있지 않은 회차예요.');
+    return { test: stripWr_(t), showAnswers: open.showAnswers };
+  },
+  // 재배열만 채점한다. 이메일·토론 글은 기록에 남기고, 정답 공개면 모범 답안을 함께 돌려준다
+  submitWriting(r) {
+    checkCode_(r.code);
+    const t = loadWr_(r.id);
+    if (!t) throw new Error('회차를 찾을 수 없어요.');
+    const a = r.answers || {}, rows = gradeWr_(t, a.build), score = rows.filter(x => x.ok).length;
+    const essays = { email: String(a.email || '').slice(0, 8000), disc: String(a.disc || '').slice(0, 8000) };
+    const rec = {
+      id: newId_(), name: clip_(r.name, 60), period: clip_(r.period, 40), cls: clip_(r.cls, 60), testId: null, wr: { id: t.id, title: wrTitle_(t.id) }, module: null, limit: 0,
+      finishedAt: Date.now(), used: (r.used || []).map(Number), score, total: rows.length, parts: { build: [score, rows.length] }, rows, essays
+    };
+    const open = openNow_(r), out = saveResult_(rec, r.attempt, wrOpen_(open, t.id));
+    if (!out.result.hidden) out.content = wrContent_(t, out.showAnswers, essays);
+    return out;
+  },
+
   // ---------- 내 기록 ----------
   // 같은 반·이름으로 낸 기록 (최근 것부터). 반 칸이 빈 옛 기록은 이름만 맞으면 넣는다.
   // 상세(JSON) 칸은 크니까 읽지 않고 회차 칸으로 종류를 알아낸다.
@@ -156,7 +180,7 @@ const API = {
     const content = reviewContent_(rec, rows, open);
     if (!open.showAnswers) rows = rows.map(x => ({ k: x.k, t: x.t, mi: x.mi, n: x.n, kind: x.kind, type: x.type, given: x.given, ok: x.ok }));
     const score = rows.filter(x => x.ok).length;
-    return { result: Object.assign(rec, { score, total: rows.length, parts: partsOf_(rows, !!rec.practice), rows, cut }), showAnswers: open.showAnswers, content };
+    return { result: Object.assign(rec, { score, total: rows.length, parts: rec.wr ? { build: [score, rows.length] } : partsOf_(rows, !!rec.practice), rows, cut }), showAnswers: open.showAnswers, content };
   },
   // 약점 분석: 내 기록(지금 열린 회차만)에서 과목·유형별 정답률(stats)과, 틀렸던 문항의 문제(정답 뺀 것)·틀린 횟수(groups)를 보낸다.
   // 문항 키: 리딩 "r|회차|모듈|번호", 빈칸 "w|회차|모듈|번호", 리스닝 "l|회차 ID|모듈|번호"
@@ -168,7 +192,7 @@ const API = {
       for (let i = 0; i < n; i++) {
         if (!mine_(who, head[i][0], cls[i][0])) continue;
         let d = null; try { d = JSON.parse(sheet.getRange(i + 2, 13).getValue()); } catch (e) {}
-        if (!d || !Array.isArray(d.rows)) continue;
+        if (!d || !Array.isArray(d.rows) || d.wr) continue;  // 라이팅은 약점 분석에 넣지 않는다
         const testId = labelInfo_(head[i][1]).testId;
         d.rows.forEach(x => {
           const k = d.lc ? ['l', d.lc.id, x.mi, x.n].join('|') : [x.kind === 'w' ? 'w' : 'r', x.t != null ? x.t : testId, x.mi, x.n].join('|');
@@ -244,7 +268,8 @@ const API = {
     const f = findRecord_(r.id);
     if (!f) throw new Error('기록을 찾을 수 없어요. 새로고침해 주세요.');
     const rows = Array.isArray(f.d.rows) ? f.d.rows : [];
-    return { result: Object.assign(f.rec, { score: rows.filter(x => x.ok).length, total: rows.length, parts: partsOf_(rows, !!f.rec.practice), rows, cut: 0 }),
+    const score = rows.filter(x => x.ok).length;
+    return { result: Object.assign(f.rec, { score, total: rows.length, parts: f.rec.wr ? { build: [score, rows.length] } : partsOf_(rows, !!f.rec.practice), rows, cut: 0 }),
       showAnswers: true, content: reviewContent_(f.rec, rows, null) };
   },
 
@@ -259,6 +284,7 @@ const API = {
     if (s.showAnswers != null) setSetting_('정답공개', s.showAnswers ? 'Y' : 'N');
     if (s.lcNew != null) setSetting_('리스닝새열린회차', String(s.lcNew).trim());
     if (s.lcTpo != null) setSetting_('리스닝TPO열린회차', String(s.lcTpo).trim());
+    if (s.wr != null) setSetting_('라이팅열린회차', String(s.wr).trim());
     if (s.extra != null) setSetting_('개별열린회차', JSON.stringify(extraOpen_(s.extra)));
     return { settings: settings_() };
   },
@@ -343,6 +369,29 @@ const API = {
     CacheService.getScriptCache().put('lcf:' + name, f.getId(), 21600);
     return { name, size: f.getSize() };
   },
+  listWr(r) { checkPw_(r.pw); return { tests: allWr_().map(wrSummary_) }; },
+  saveWr(r) {
+    checkPw_(r.pw);
+    const list = Array.isArray(r.tests) ? r.tests : (r.tests && r.tests.tests) || [];
+    if (!list.length) throw new Error('추가할 라이팅 회차가 없어요.');
+    list.forEach(validateWr_);
+    let added = 0, updated = 0;
+    withLock_(() => {
+      const sheet = sheet_(SH.wr), rows = sheet.getDataRange().getValues(), idx = {}, fresh = [];
+      rows.forEach((row, i) => { if (i) idx[String(row[0])] = i + 1; });
+      list.forEach(t => {
+        const line = [Number(t.id), wrTitle_(t.id), t.build.length, JSON.stringify(t)];
+        if (idx[t.id]) { sheet.getRange(idx[t.id], 1, 1, 4).setValues([line]); updated++; } else fresh.push(line);
+      });
+      added = appendRows_(sheet, fresh);
+    });
+    return { added, updated, tests: allWr_().map(wrSummary_) };
+  },
+  deleteWr(r) {
+    checkPw_(r.pw);
+    withLock_(() => deleteRows_(SH.wr, 0, r.id));
+    return { tests: allWr_().map(wrSummary_) };
+  },
   deleteLc(r) {
     checkPw_(r.pw);
     withLock_(() => { deleteRows_(SH.lc, 0, r.id); deleteRows_(SH.lcx, 0, r.id); });
@@ -355,16 +404,16 @@ const API = {
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i]; if (!row[13]) continue;
       let detail = null; try { detail = JSON.parse(row[12]); } catch (e) {}
-      const practice = detail && detail.practice || null, lc = detail && detail.lc || null;
+      const practice = detail && detail.practice || null, lc = detail && detail.lc || null, wr = detail && detail.wr || null;
       out.push({
         id: String(row[13]), finishedAt: row[0] instanceof Date ? row[0].getTime() : Number(row[0]) || 0,
-        name: String(row[1]), practice, lc, secs: detail && detail.secs || null, period: String(row[14] || ''), cls: String(row[15] || ''),
-        testId: practice || lc ? null : Number((String(row[2]).match(/TEST (\d+)/) || [])[1]) || String(row[2]),
+        name: String(row[1]), practice, lc, wr, secs: detail && detail.secs || null, period: String(row[14] || ''), cls: String(row[15] || ''),
+        testId: practice || lc || wr ? null : Number((String(row[2]).match(/TEST (\d+)/) || [])[1]) || String(row[2]),
         module: detail && (detail.module === 0 || detail.module === 1) ? detail.module : (/ M1$/.test(String(row[2])) ? 0 : / M2$/.test(String(row[2])) ? 1 : null),
         limit: detail && Number(detail.limit) || 0,
         score: Number(row[3]) || 0, total: Number(row[4]) || 0,
         // 모듈별 점수 칸("3/10")은 예전에 날짜로 바뀌어 저장된 것이 있어서, 상세 칸이 있으면 거기서 다시 센다
-        parts: lc ? detail.parts || {} : !practice && detail && Array.isArray(detail.rows) ? partText_(partsOf_(detail.rows, false))
+        parts: lc || wr ? detail.parts || {} : !practice && detail && Array.isArray(detail.rows) ? partText_(partsOf_(detail.rows, false))
           : { '0w': row[5], '0r': row[6], '1w': row[7], '1r': row[8] }, usedText: String(row[9]),
         wrong: String(row[10]), rows: detail && detail.rows || null, used: detail && detail.used || null
       });
@@ -382,7 +431,7 @@ const API = {
 // ---------- 설정 ----------
 function settings_() {
   return { code: setting_('입장코드'), open: setting_('열린회차'), showAnswers: setting_('정답공개') !== 'N', pwIsDefault: setting_('관리자비밀번호') === DEFAULT_PW,
-    lcNew: setting_('리스닝새열린회차'), lcTpo: setting_('리스닝TPO열린회차'), extra: extraOpen_(setting_('개별열린회차')) };
+    lcNew: setting_('리스닝새열린회차'), lcTpo: setting_('리스닝TPO열린회차'), wr: setting_('라이팅열린회차'), extra: extraOpen_(setting_('개별열린회차')) };
 }
 function setting_(key) {
   const rows = sheet_(SH.settings).getDataRange().getValues();
@@ -410,11 +459,11 @@ function checkCode_(code) {
 function openNow_(r) {
   const rows = sheet_(SH.settings).getDataRange().getValues();
   const get = key => { for (const row of rows) if (String(row[0]) === key) return String(row[1] == null ? '' : row[1]).replace(/^'/, '').trim(); return ''; };
-  const open = { rc: parseOpen_(get('열린회차')), lcNew: parseOpen_(get('리스닝새열린회차')), lcTpo: parseOpen_(get('리스닝TPO열린회차')), showAnswers: get('정답공개') !== 'N' };
+  const open = { rc: parseOpen_(get('열린회차')), lcNew: parseOpen_(get('리스닝새열린회차')), lcTpo: parseOpen_(get('리스닝TPO열린회차')), wr: parseOpen_(get('라이팅열린회차')), showAnswers: get('정답공개') !== 'N' };
   if (!r) return open;
   const name = norm_(r.name), cls = norm_(r.cls);
   extraOpen_(get('개별열린회차')).filter(x => (!x.cls || norm_(x.cls) === cls) && (!x.name || norm_(x.name) === name)).forEach(x => {
-    [['rc', x.open], ['lcNew', x.lcNew], ['lcTpo', x.lcTpo]].forEach(([k, v]) => {
+    [['rc', x.open], ['lcNew', x.lcNew], ['lcTpo', x.lcTpo], ['wr', x.wr]].forEach(([k, v]) => {
       const add = parseOpen_(v);
       if (add && !(k === 'rc' && !open.rc)) open[k] = new Set([...(open[k] || []), ...add]);
     });
@@ -425,8 +474,8 @@ function openNow_(r) {
 function extraOpen_(v) {
   if (typeof v === 'string') { try { v = v ? JSON.parse(v) : []; } catch (e) { v = []; } }
   const str = (x, max) => String(x == null ? '' : x).trim().slice(0, max);
-  return (Array.isArray(v) ? v : []).slice(0, 300).map(x => ({ cls: str(x && x.cls, 60), name: str(x && x.name, 60), open: str(x && x.open, 200), lcNew: str(x && x.lcNew, 200), lcTpo: str(x && x.lcTpo, 200) }))
-    .filter(x => (x.cls || x.name) && (x.open || x.lcNew || x.lcTpo));
+  return (Array.isArray(v) ? v : []).slice(0, 300).map(x => ({ cls: str(x && x.cls, 60), name: str(x && x.name, 60), open: str(x && x.open, 200), lcNew: str(x && x.lcNew, 200), lcTpo: str(x && x.lcTpo, 200), wr: str(x && x.wr, 200) }))
+    .filter(x => (x.cls || x.name) && (x.open || x.lcNew || x.lcTpo || x.wr));
 }
 function parseOpen_(s) {
   if (!s) return null;
@@ -439,6 +488,8 @@ function parseOpen_(s) {
 }
 const rcOpen_ = (open, id) => !open.rc || open.rc.has(Number(id));
 // 리스닝은 열린 회차 칸이 비어 있으면 아무 회차도 열리지 않는다 (리딩은 비어 있으면 전부 열림)
+// 라이팅도 열린 회차 칸이 비어 있으면 아무 회차도 열리지 않는다
+const wrOpen_ = (open, id) => !!open.wr && open.wr.has(Number(id));
 const lcOpen_ = (open, t) => { const s = t.set === 'new' ? open.lcNew : open.lcTpo; return !!s && s.has(Number(t.no)); };
 // from~to 회차 중 열린 회차의 빈칸 지문: [{ t, mi, start, text }]
 function wordsSets_(from, to, open) {
@@ -505,6 +556,53 @@ function stripAnswers_(t) {
 }
 // 빈칸 지문의 학생용 글: 빠진 글자는 글자 수만 남긴다 ("popul[ation]" → "popul[5]")
 function wordsText_(s) { return String(s.text).replace(/\[([a-z]+)\]/g, (a, w) => '[' + w.length + ']'); }
+
+// ---------- 라이팅 문제 ----------
+// 회차 하나: { id, build: [{ n, ctx, slots: [{ w, end, fixed }], extra: [쓰지 않는 조각], answer }],
+//   email: { n, situation, task, model }, disc: { n, prof: { name, text }, students: [{ name, text }], question, model } }
+const wrTitle_ = id => 'NEW TOEFL 3 TEST ' + id;
+function allWr_() {
+  const rows = sheet_(SH.wr).getDataRange().getValues(), out = [];
+  for (let i = 1; i < rows.length; i++) { try { out.push(JSON.parse(rows[i][3])); } catch (e) {} }
+  return out.sort((a, b) => a.id - b.id);
+}
+function loadWr_(id) {
+  const rows = sheet_(SH.wr).getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) if (String(rows[i][0]) === String(id)) { try { return JSON.parse(rows[i][3]); } catch (e) { return null; } }
+  return null;
+}
+const wrSummary_ = t => ({ id: t.id, title: wrTitle_(t.id), build: t.build.length });
+function validateWr_(t) {
+  const str = v => typeof v === 'string';
+  if (!t || !(Number.isInteger(Number(t.id)) && Number(t.id) > 0) || !Array.isArray(t.build) || !t.build.length) throw new Error('라이팅 회차 형식이 잘못됐어요 (id, build 필요).');
+  t.id = Number(t.id);
+  t.build.forEach(b => { if (!Array.isArray(b.slots) || !b.slots.every(x => x && str(x.w) && str(x.end)) || !b.slots.some(x => !x.fixed)) throw new Error('TEST ' + t.id + ' 재배열 ' + b.n + '번이 잘못됐어요.'); });
+  if (!t.email || !str(t.email.task) || !t.disc || !str(t.disc.question)) throw new Error('TEST ' + t.id + ': 이메일·토론 문제가 없어요.');
+}
+// 학생에게 보낼 문제: 재배열은 고정 조각과 빈칸 자리만 두고, 옮길 조각은 쓰지 않는 조각과 섞어 보낸다 (정답 순서가 드러나지 않게). 정답·모범 답안은 뺀다
+function stripWr_(t) {
+  const mix = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  return { id: t.id, title: wrTitle_(t.id),
+    build: t.build.map(b => ({ n: b.n, ctx: b.ctx, slots: b.slots.map(x => (x.fixed ? { w: x.w, end: x.end } : { end: x.end })), bank: mix(b.slots.filter(x => !x.fixed).map(x => x.w).concat(b.extra || [])) })),
+    email: { n: t.email.n, situation: t.email.situation, task: t.email.task },
+    disc: { n: t.disc.n, prof: t.disc.prof, students: t.disc.students, question: t.disc.question } };
+}
+// 재배열 채점: build는 { 문항 번호: [빈칸 순서대로 고른 조각] }. 빈칸마다 그 자리 조각과 같아야 맞는다 (대소문자 무시)
+function gradeWr_(t, build) {
+  build = build && typeof build === 'object' ? build : {};
+  return t.build.map(b => {
+    const given = Array.isArray(build[b.n]) ? build[b.n].map(v => String(v == null ? '' : v)) : [], mov = b.slots.filter(x => !x.fixed);
+    let i = 0;
+    const sentence = b.slots.map(x => (x.fixed ? x.w : given[i++] || '___') + x.end).join(' ');
+    return { k: '0-' + b.n, mi: 0, n: b.n, kind: 'b', given: given.some(Boolean) ? sentence : '', correct: b.answer, ok: mov.every((x, j) => norm_(given[j]) === norm_(x.w)) };
+  });
+}
+// 다시 보기·결과 화면에 보낼 라이팅: 재배열 앞 문장, 이메일·토론 문제와 학생 글, 정답 공개면 모범 답안
+function wrContent_(t, withModels, essays) {
+  return { wr: { id: t.id, title: wrTitle_(t.id), build: t.build.map(b => ({ n: b.n, ctx: b.ctx })),
+    email: { situation: t.email.situation, task: t.email.task, model: withModels ? t.email.model : '' },
+    disc: { prof: t.disc.prof, students: t.disc.students, question: t.disc.question, model: withModels ? t.disc.model : '' } }, essays: essays || {} };
+}
 
 // ---------- 리스닝 문제 ----------
 // 시험 하나: { id: "new-1" | "tpo-7", set, no, title, packs: [m1 bytes, m2 bytes],
@@ -604,6 +702,8 @@ function findRecord_(id) {
   if (d.practice) rec.practice = d.practice;
   if (d.module === 0 || d.module === 1) rec.module = d.module;
   if (Array.isArray(d.secs)) rec.secs = d.secs;
+  if (d.wr) rec.wr = d.wr;
+  if (d.essays) rec.essays = d.essays;
   Object.assign(rec, { id, name: String(row[1]).trim(), finishedAt: time_(row[0]), used: Array.isArray(d.used) ? d.used : [], limit: Number(d.limit) || 0 });
   return { row, d, rec };
 }
@@ -616,6 +716,10 @@ function reviewContent_(rec, rows, open) {
       if (s.type === 'words' && blanks_(s).some(b => has.has(tid + '-' + mi + '-' + b.n))) sets.push({ t: tid, mi, start: s.start, text: wordsText_(s) });
     })));
     return sets.length ? { sets } : null;
+  }
+  if (rec.wr) {
+    const t = loadWr_(rec.wr.id);
+    return t ? wrContent_(t, !open || open.showAnswers, rec.essays || {}) : null;
   }
   if (rec.lc) {
     const t = loadLc_(rec.lc.id);
@@ -760,11 +864,13 @@ function appendResult_(rec) {
     const fmt = s => { s = Math.max(0, Math.round(s || 0)); return Math.floor(s / 60) + '분 ' + (s % 60) + '초'; };
     const lim = rec.limit > 0 ? ' (제한 ' + rec.limit + '분)' : ' (제한 없음)';
     // 빈칸 모음: "빈칸 5분 2초 (제한 없음)" / 모듈 하나: "M1 12분 3초 (제한 18분)" / 전체: "12분 3초 + 8분 0초"
-    const used = rec.practice ? '빈칸 ' + fmt(rec.used[0]) + lim
+    const used = rec.wr ? rec.used.map(fmt).join(' + ')
+      : rec.practice ? '빈칸 ' + fmt(rec.used[0]) + lim
       : rec.lc ? (rec.module != null ? 'M' + (rec.module + 1) + ' ' : '') + fmt(rec.used[0])
       : rec.module != null ? 'M' + (rec.module + 1) + ' ' + fmt(rec.used[0]) + lim
       : rec.used.map(fmt).join(' + ');
-    const label = rec.practice ? '빈칸 TEST ' + rec.practice.from + (rec.practice.to !== rec.practice.from ? '-' + rec.practice.to : '')
+    const label = rec.wr ? '라이팅 ' + rec.wr.title
+      : rec.practice ? '빈칸 TEST ' + rec.practice.from + (rec.practice.to !== rec.practice.from ? '-' + rec.practice.to : '')
       : rec.lc ? '리스닝 ' + rec.lc.title + (rec.module != null ? ' M' + (rec.module + 1) : '') + (rec.secs ? ' (' + rec.secs.map(s => LC_TYPE_NAME[s]).join(' · ') + ')' : '')
       : 'TEST ' + rec.testId + (rec.module != null ? ' M' + (rec.module + 1) : '');
     const where = x => (x.t != null ? 'T' + x.t + ' ' : '') + 'M' + (x.mi + 1) + '-' + x.n;
@@ -777,7 +883,7 @@ function appendResult_(rec) {
       part('0w'), part('0r'), part('1w'), part('1r'), used,
       clip_(wrong.map(where).join(', '), 5000),
       clip_(wrong.map(x => where(x) + ': ' + (x.given || '(빈칸)') + ' → ' + (x.kind === 'w' ? x.full : x.correct)).join('; '), 5000),
-      JSON.stringify({ used: rec.used, rows: rec.rows, module: rec.module, limit: rec.limit, practice: rec.practice || null, lc: rec.lc || null, secs: rec.secs || undefined, parts: rec.lc ? rec.parts : undefined }), rec.id,
+      JSON.stringify({ used: rec.used, rows: rec.rows, module: rec.module, limit: rec.limit, practice: rec.practice || null, lc: rec.lc || null, secs: rec.secs || undefined, parts: rec.lc || rec.wr ? rec.parts : undefined, wr: rec.wr || undefined, essays: rec.essays || undefined }), rec.id,
       rec.period || '', rec.cls || ''
     ]);
   }
@@ -804,8 +910,9 @@ function time_(v) { return v instanceof Date ? v.getTime() : Number(v) || 0; }
 // 결과 시트의 회차 칸("TEST 5 M1", "빈칸 TEST 1-10", "리스닝 NEW TOEFL 3 TEST 1 M2 (Best Response · Conversation)")에서 기록 종류를 읽는다
 // 리스닝 Module 1 + 2 이어 풀기는 M이 없다 ("리스닝 NEW TOEFL 3 TEST 1 (Conversation)")
 function labelInfo_(label) {
-  const s = String(label == null ? '' : label).trim(), out = { testId: null, module: null, practice: null, lc: null, secs: null };
+  const s = String(label == null ? '' : label).trim(), out = { testId: null, module: null, practice: null, lc: null, secs: null, wr: null };
   let m;
+  if ((m = s.match(/^라이팅 (NEW TOEFL 3 TEST (\d+))$/))) return Object.assign(out, { wr: { id: +m[2], title: m[1] } });
   if ((m = s.match(/^빈칸 TEST (\d+)(?:-(\d+))?$/))) return Object.assign(out, { practice: { from: +m[1], to: +(m[2] || m[1]) } });
   if ((m = s.match(/^TEST (\d+)(?: M([12]))?$/))) return Object.assign(out, { testId: +m[1], module: m[2] ? m[2] - 1 : null });
   if ((m = s.match(/^리스닝 (.+? TEST \d+)(?: M([12]))?(?: \((.+)\))?$/))) {
@@ -822,6 +929,7 @@ function labelInfo_(label) {
 // 빈칸 모아 풀기는 낼 때 열린 회차만 채점하므로 점수는 보여 준다 (문항은 myResult가 지금 열린 회차 것만 보낸다).
 function recOpen_(info, open) {
   if (info.practice) return true;
+  if (info.wr) return wrOpen_(open, info.wr.id);
   if (info.testId != null) return !open.rc || open.rc.has(Number(info.testId));
   if (info.lc && /^(new|tpo)-\d+$/.test(info.lc.id || '')) {
     const p = info.lc.id.split('-'), s = p[0] === 'new' ? open.lcNew : open.lcTpo;
@@ -861,6 +969,8 @@ function sheet_(name) {
     sheet.appendRow(['회차', '제목', '문제 수', 'JSON']);
   } else if (name === SH.lc) {
     sheet.appendRow(['ID', '세트', '회차', '문제 수', 'JSON']);
+  } else if (name === SH.wr) {
+    sheet.appendRow(['회차', '제목', '재배열 수', 'JSON']);
   } else if (name === SH.lcx) {
     sheet.appendRow(LCX_HEADERS);
   } else if (name === SH.results) {
