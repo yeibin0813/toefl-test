@@ -25,6 +25,20 @@ function rcReviewBody(V) {
     return html ? `<section class="stack"><h3 class="rvmod">${esc(m.name)}</h3>${html}</section>` : '';
   }).join('');
 }
+// 구문단어: 단어 → 구문 순서로, 소제목마다 뜻 · 쓴 답 · 정답(틀렸고 정답 공개일 때만 x.correct가 있다). 뜻(ko)과 소제목 번호(h)는 기록 줄에 있다
+function vocReviewBody(V) {
+  const heads = (V.r.voc && V.r.voc.heads) || [];
+  return [['v', '단어'], ['p', '구문']].map(([kind, name]) => {
+    const rows = V.r.rows.filter(x => x.kind === kind); rows.forEach(x => V.seen && V.seen.add(x.k));
+    const shown = rows.filter(x => !V.onlyWrong || !x.ok);
+    if (!shown.length) return '';
+    let last = null;
+    return `<section class="stack"><h3 class="rvmod">${name} <span class="note num">${rows.filter(x => x.ok).length}/${rows.length}</span></h3><ul class="vlist sheet">${shown.map(x => {
+      const hd = x.h !== last && heads[x.h] ? `<li class="vhead">${esc(heads[x.h])}</li>` : ''; last = x.h;
+      return hd + `<li class="vrow${x.ok ? '' : ' bad'}"><span class="mark ${x.ok ? 'ok' : 'bad'}">${x.ok ? 'O' : 'X'}<span class="sr">${x.ok ? ' 맞음' : ' 틀림'}</span></span><span class="num vn">${x.n}.</span><span class="vko">${esc(x.ko || '')}</span>
+        <span class="vans"><span class="${x.given ? '' : 'note'}">${x.given ? esc(x.given) : '(빈칸)'}</span>${!x.ok && x.correct ? `<span class="tag ok">정답</span><b>${esc(x.correct)}</b>` : ''}</span></li>`; }).join('')}</ul></section>`;
+  }).join('');
+}
 // 모아 풀기: 회차·모듈마다 지문 (빈칸 또는 리딩)
 function wordsReviewBody(V) {
   const by = rowMap(V.r.rows);

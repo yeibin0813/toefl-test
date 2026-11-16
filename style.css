@@ -162,6 +162,19 @@ button.ins.on { background: var(--accent); color: var(--accent-ink); }
 .wrchip { font: inherit; font-size: 16px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--ink); cursor: pointer; }
 .wrchip:hover:not(:disabled) { border-color: var(--accent); }
 .wrchip:disabled { opacity: .3; cursor: default; }
+/* 구문단어 시험·다시 보기: 번호 · 뜻 · 답 칸 */
+.vlist { list-style: none; margin: 0; padding: 4px 16px; }
+.vrow { display: grid; grid-template-columns: auto 2.2em 1fr minmax(160px, 1fr); gap: 4px 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.vrow:last-child { border-bottom: 0; }
+.vrow.vq { grid-template-columns: 2.2em 1fr minmax(160px, 1fr); }  /* 시험 칸: O/X 표시가 없다 */
+.vrow .vn { color: var(--muted); }
+.vko { line-height: 1.5; }
+.vhead { font-weight: 600; font-size: 14px; color: var(--muted); padding: 14px 0 4px; }
+input.vin { font: inherit; font-size: 16px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); width: 100%; box-sizing: border-box; }
+input.vin:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.vans { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.vrow.bad .vans > span:first-child:not(.note) { color: var(--bad); text-decoration: line-through; }
+@media (max-width: 560px) { .vrow { grid-template-columns: auto 2em 1fr; } .vrow.vq { grid-template-columns: 2em 1fr; } .vrow input.vin, .vrow .vans { grid-column: 1 / -1; } }
 /* 끌어 놓기: 손가락으로 끌 때 화면이 같이 움직이지 않게, 마우스로 끌 때 글자가 선택되지 않게 */
 .wrbuild { user-select: none; -webkit-user-select: none; }
 .wrchip:not(:disabled), button.wrslot { touch-action: none; cursor: grab; }
