@@ -5,7 +5,7 @@
 // 입장 코드가 맞는 학생에게만 이 서버가 꺼내 보낸다.
 // 리스닝 해설(문항별 해설·해석과 묶음별 스크립트·해석)은 "리스닝해설" 시트에 회차마다 한 줄로 있고, 정답 공개일 때 다시 보기에서만 보낸다.
 
-const SH = { settings: '설정', tests: '문제', results: '결과', lc: '리스닝', lcx: '리스닝해설', wr: '라이팅' };
+const SH = { settings: '설정', tests: '문제', results: '결과', lc: '리스닝', lcx: '리스닝해설', wr: '라이팅', voc: '구문단어' };
 const LC_FOLDER = '토플 리스닝 음원';
 // 리스닝 세트 이름. 회차 제목은 저장된 값 대신 늘 "세트 이름 + TEST 번호"로 만든다 (예: NEW TOEFL 3 TEST 1).
 const LC_SET_NAME = { new: 'NEW TOEFL 3', tpo: 'TPO' };
@@ -49,7 +49,7 @@ const API = {
     checkCode_(r.code);
     const open = openNow_(r);
     return { tests: allTests_().filter(t => rcOpen_(open, t.id)).map(testSummary_), lcTests: allLc_().filter(t => lcOpen_(open, t)).map(lcSummary_),
-      wrTests: allWr_().filter(t => wrOpen_(open, t.id)).map(wrSummary_) };
+      wrTests: allWr_().filter(t => wrOpen_(open, t.id)).map(wrSummary_), vocSets: allVoc_().filter(v => vocOpen_(open, v.id)).map(vocSummary_) };
   },
   getTest(r) {
     checkCode_(r.code);
@@ -154,6 +154,28 @@ const API = {
     return out;
   },
 
+  // ---------- 구문·단어 시험 ----------
+  // 학생에게는 한국어 뜻만 보낸다 (영어는 채점할 때 서버에서만 쓴다)
+  getVoc(r) {
+    checkCode_(r.code);
+    const v = loadVoc_(r.id), open = openNow_(r);
+    if (!v || !vocOpen_(open, v.id)) throw new Error('지금은 열려 있지 않은 세트예요.');
+    return { set: stripVoc_(v), showAnswers: open.showAnswers };
+  },
+  submitVoc(r) {
+    checkCode_(r.code);
+    const v = loadVoc_(r.id);
+    if (!v) throw new Error('세트를 찾을 수 없어요.');
+    // 푸는 사이에 선생님이 세트를 다시 올려 뜻이 바뀌었으면 채점하지 않는다 (영어 철자만 고친 것은 그대로 채점)
+    if (Array.isArray(r.ko) && JSON.stringify(r.ko) !== JSON.stringify(v.words.concat(v.phrases).map(x => x.ko))) throw new Error('선생님이 이 세트를 바꿨어요. 답안을 버리고 처음부터 다시 풀어 주세요.');
+    const rows = gradeVoc_(v, r.answers || {}), score = rows.filter(x => x.ok).length;
+    const rec = {
+      id: newId_(), name: clip_(r.name, 60), period: clip_(r.period, 40), cls: clip_(r.cls, 60), testId: null, voc: { id: v.id, title: v.title, heads: v.heads || [] }, module: null, limit: 0,
+      finishedAt: Date.now(), used: (r.used || []).map(Number), score, total: rows.length, parts: partsOf_(rows, null), rows
+    };
+    return saveResult_(rec, r.attempt, vocOpen_(openNow_(r), v.id));
+  },
+
   // ---------- 내 기록 ----------
   // 같은 반·이름으로 낸 기록 (최근 것부터). 반 칸이 빈 옛 기록은 이름만 맞으면 넣는다.
   // 상세(JSON) 칸은 크니까 읽지 않고 회차 칸으로 종류를 알아낸다.
@@ -191,7 +213,7 @@ const API = {
       if (cut) rec.orig = { score: Number(row[3]) || 0, total: Number(row[4]) || 0 };
     }
     const content = reviewContent_(rec, rows, open);
-    if (!open.showAnswers) rows = rows.map(x => ({ k: x.k, t: x.t, mi: x.mi, n: x.n, kind: x.kind, type: x.type, given: x.given, ok: x.ok }));
+    if (!open.showAnswers) rows = rows.map(x => ({ k: x.k, t: x.t, mi: x.mi, n: x.n, kind: x.kind, type: x.type, h: x.h, ko: x.ko, given: x.given, ok: x.ok }));
     const score = rows.filter(x => x.ok).length;
     return { result: Object.assign(rec, { score, total: rows.length, parts: rec.wr ? { build: [score, rows.length] } : partsOf_(rows, rec.practice), rows, cut }), showAnswers: open.showAnswers, content };
   },
@@ -205,7 +227,7 @@ const API = {
       for (let i = 0; i < n; i++) {
         if (!mine_(who, head[i][0], cls[i][0])) continue;
         let d = null; try { d = JSON.parse(sheet.getRange(i + 2, 13).getValue()); } catch (e) {}
-        if (!d || !Array.isArray(d.rows) || d.wr) continue;  // 라이팅은 약점 분석에 넣지 않는다
+        if (!d || !Array.isArray(d.rows) || d.wr || d.voc) continue;  // 라이팅·구문단어는 약점 분석에 넣지 않는다
         const testId = labelInfo_(head[i][1]).testId;
         d.rows.forEach(x => {
           const k = d.lc ? ['l', d.lc.id, x.mi, x.n].join('|') : [x.kind === 'w' ? 'w' : 'r', x.t != null ? x.t : testId, x.mi, x.n].join('|');
@@ -299,6 +321,7 @@ const API = {
     if (s.lcNew != null) setSetting_('리스닝새열린회차', String(s.lcNew).trim());
     if (s.lcTpo != null) setSetting_('리스닝TPO열린회차', String(s.lcTpo).trim());
     if (s.wr != null) setSetting_('라이팅열린회차', String(s.wr).trim());
+    if (s.voc != null) setSetting_('단어열린세트', String(s.voc).trim());
     if (s.extra != null) setSetting_('개별열린회차', JSON.stringify(extraOpen_(s.extra)));
     return { settings: settings_() };
   },
@@ -406,6 +429,39 @@ const API = {
     withLock_(() => deleteRows_(SH.wr, 0, r.id));
     return { tests: allWr_().map(wrSummary_) };
   },
+  listVoc(r) { checkPw_(r.pw); return { sets: allVoc_().map(vocSummary_) }; },
+  // 구문단어 세트 올리기: 제목이 같은 세트가 있으면 그 번호 그대로 내용을 바꾸고, 없으면 새 번호를 붙인다
+  saveVoc(r) {
+    checkPw_(r.pw);
+    const list = Array.isArray(r.sets) ? r.sets : [];
+    if (!list.length) throw new Error('올릴 세트가 없어요.');
+    if (list.length > 200) throw new Error('한 번에 200세트까지 올릴 수 있어요.');
+    const sets = list.map(validateVoc_);
+    // 한 번에 같은 제목이 둘이면 어느 쪽을 남길지 모르니 아무것도 쓰기 전에 막는다 ("X 구문단어.xlsx"와 "X 구문단어 (1).xlsx"는 제목이 같다)
+    const dup = sets.find((v, i) => sets.findIndex(w => w.title === v.title) < i);
+    if (dup) throw new Error('제목이 같은 파일이 두 개 이상 있어요: ' + dup.title + '. 하나만 골라 주세요.');
+    let added = 0, updated = 0;
+    withLock_(() => {
+      const sheet = sheet_(SH.voc), rows = sheet.getDataRange().getValues(), byTitle = {}, fresh = [];
+      // 지운 세트의 번호는 다시 쓰지 않는다 (예전 기록이 새 세트에 붙지 않게). 지금까지 준 가장 큰 번호 + 1을 설정 시트에 둔다
+      let next = Math.max(1, Number(setting_('단어다음번호')) || 1);
+      rows.forEach((row, i) => { if (!i) return; byTitle[String(row[1])] = { at: i + 1, id: Number(row[0]) }; next = Math.max(next, Number(row[0]) + 1); });
+      sets.forEach(v => {
+        const old = byTitle[v.title];
+        v.id = old ? old.id : next++;
+        const line = [v.id, v.title, v.words.length, v.phrases.length, JSON.stringify(v)];
+        if (old) { sheet.getRange(old.at, 1, 1, 5).setValues([line]); updated++; } else fresh.push(line);
+      });
+      added = appendRows_(sheet, fresh);
+      setSetting_('단어다음번호', next);
+    });
+    return { added, updated, sets: allVoc_().map(vocSummary_) };
+  },
+  deleteVoc(r) {
+    checkPw_(r.pw);
+    withLock_(() => deleteRows_(SH.voc, 0, r.id));
+    return { sets: allVoc_().map(vocSummary_) };
+  },
   deleteLc(r) {
     checkPw_(r.pw);
     withLock_(() => { deleteRows_(SH.lc, 0, r.id); deleteRows_(SH.lcx, 0, r.id); });
@@ -418,16 +474,16 @@ const API = {
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i]; if (!row[13]) continue;
       let detail = null; try { detail = JSON.parse(row[12]); } catch (e) {}
-      const practice = detail && detail.practice || null, lc = detail && detail.lc || null, wr = detail && detail.wr || null;
+      const practice = detail && detail.practice || null, lc = detail && detail.lc || null, wr = detail && detail.wr || null, voc = detail && detail.voc || null;
       out.push({
         id: String(row[13]), finishedAt: row[0] instanceof Date ? row[0].getTime() : Number(row[0]) || 0,
-        name: String(row[1]), practice, lc, wr, secs: detail && detail.secs || null, period: String(row[14] || ''), cls: String(row[15] || ''),
-        testId: practice || lc || wr ? null : Number((String(row[2]).match(/TEST (\d+)/) || [])[1]) || String(row[2]),
+        name: String(row[1]), practice, lc, wr, voc, secs: detail && detail.secs || null, period: String(row[14] || ''), cls: String(row[15] || ''),
+        testId: practice || lc || wr || voc ? null : Number((String(row[2]).match(/TEST (\d+)/) || [])[1]) || String(row[2]),
         module: detail && (detail.module === 0 || detail.module === 1) ? detail.module : (/ M1$/.test(String(row[2])) ? 0 : / M2$/.test(String(row[2])) ? 1 : null),
         limit: detail && Number(detail.limit) || 0,
         score: Number(row[3]) || 0, total: Number(row[4]) || 0,
         // 모듈별 점수 칸("3/10")은 예전에 날짜로 바뀌어 저장된 것이 있어서, 상세 칸이 있으면 거기서 다시 센다
-        parts: lc || wr ? detail.parts || {} : !practice && detail && Array.isArray(detail.rows) ? partText_(partsOf_(detail.rows, false))
+        parts: lc || wr || voc ? detail.parts || {} : !practice && detail && Array.isArray(detail.rows) ? partText_(partsOf_(detail.rows, false))
           : { '0w': row[5], '0r': row[6], '1w': row[7], '1r': row[8] }, usedText: String(row[9]),
         wrong: String(row[10]), rows: detail && detail.rows || null, used: detail && detail.used || null
       });
@@ -445,7 +501,7 @@ const API = {
 // ---------- 설정 ----------
 function settings_() {
   return { code: setting_('입장코드'), open: setting_('열린회차'), showAnswers: setting_('정답공개') !== 'N', pwIsDefault: setting_('관리자비밀번호') === DEFAULT_PW,
-    lcNew: setting_('리스닝새열린회차'), lcTpo: setting_('리스닝TPO열린회차'), wr: setting_('라이팅열린회차'), extra: extraOpen_(setting_('개별열린회차')) };
+    lcNew: setting_('리스닝새열린회차'), lcTpo: setting_('리스닝TPO열린회차'), wr: setting_('라이팅열린회차'), voc: setting_('단어열린세트'), extra: extraOpen_(setting_('개별열린회차')) };
 }
 function setting_(key) {
   const rows = sheet_(SH.settings).getDataRange().getValues();
@@ -473,11 +529,11 @@ function checkCode_(code) {
 function openNow_(r) {
   const rows = sheet_(SH.settings).getDataRange().getValues();
   const get = key => { for (const row of rows) if (String(row[0]) === key) return String(row[1] == null ? '' : row[1]).replace(/^'/, '').trim(); return ''; };
-  const open = { rc: parseOpen_(get('열린회차')), lcNew: parseOpen_(get('리스닝새열린회차')), lcTpo: parseOpen_(get('리스닝TPO열린회차')), wr: parseOpen_(get('라이팅열린회차')), showAnswers: get('정답공개') !== 'N' };
+  const open = { rc: parseOpen_(get('열린회차')), lcNew: parseOpen_(get('리스닝새열린회차')), lcTpo: parseOpen_(get('리스닝TPO열린회차')), wr: parseOpen_(get('라이팅열린회차')), voc: parseOpen_(get('단어열린세트')), showAnswers: get('정답공개') !== 'N' };
   if (!r) return open;
   const name = norm_(r.name), cls = norm_(r.cls);
   extraOpen_(get('개별열린회차')).filter(x => (!x.cls || norm_(x.cls) === cls) && (!x.name || norm_(x.name) === name)).forEach(x => {
-    [['rc', x.open], ['lcNew', x.lcNew], ['lcTpo', x.lcTpo], ['wr', x.wr]].forEach(([k, v]) => {
+    [['rc', x.open], ['lcNew', x.lcNew], ['lcTpo', x.lcTpo], ['wr', x.wr], ['voc', x.voc]].forEach(([k, v]) => {
       const add = parseOpen_(v);
       if (add && !(k === 'rc' && !open.rc)) open[k] = new Set([...(open[k] || []), ...add]);
     });
@@ -488,8 +544,8 @@ function openNow_(r) {
 function extraOpen_(v) {
   if (typeof v === 'string') { try { v = v ? JSON.parse(v) : []; } catch (e) { v = []; } }
   const str = (x, max) => String(x == null ? '' : x).trim().slice(0, max);
-  return (Array.isArray(v) ? v : []).slice(0, 300).map(x => ({ cls: str(x && x.cls, 60), name: str(x && x.name, 60), open: str(x && x.open, 200), lcNew: str(x && x.lcNew, 200), lcTpo: str(x && x.lcTpo, 200), wr: str(x && x.wr, 200) }))
-    .filter(x => (x.cls || x.name) && (x.open || x.lcNew || x.lcTpo || x.wr));
+  return (Array.isArray(v) ? v : []).slice(0, 300).map(x => ({ cls: str(x && x.cls, 60), name: str(x && x.name, 60), open: str(x && x.open, 200), lcNew: str(x && x.lcNew, 200), lcTpo: str(x && x.lcTpo, 200), wr: str(x && x.wr, 200), voc: str(x && x.voc, 200) }))
+    .filter(x => (x.cls || x.name) && (x.open || x.lcNew || x.lcTpo || x.wr || x.voc));
 }
 function parseOpen_(s) {
   if (!s) return null;
@@ -504,6 +560,8 @@ const rcOpen_ = (open, id) => !open.rc || open.rc.has(Number(id));
 // 리스닝은 열린 회차 칸이 비어 있으면 아무 회차도 열리지 않는다 (리딩은 비어 있으면 전부 열림)
 // 라이팅도 열린 회차 칸이 비어 있으면 아무 회차도 열리지 않는다
 const wrOpen_ = (open, id) => !!open.wr && open.wr.has(Number(id));
+// 구문단어 세트도 열린 세트 칸이 비어 있으면 아무 세트도 열리지 않는다
+const vocOpen_ = (open, id) => !!open.voc && open.voc.has(Number(id));
 const lcOpen_ = (open, t) => { const s = t.set === 'new' ? open.lcNew : open.lcTpo; return !!s && s.has(Number(t.no)); };
 // from~to 회차 중 열린 회차의 빈칸 지문: [{ t, mi, start, text }]
 // 모아 풀기 지문: from~to 회차 중 열린 회차에서 sec 섹션 지문만 (정답 포함, 서버 안에서만 쓴다)
@@ -597,6 +655,67 @@ function loadWr_(id) {
   return null;
 }
 const wrSummary_ = t => ({ id: t.id, title: wrTitle_(t.id), build: t.build.length });
+
+// ---------- 구문단어 세트 ----------
+// 세트 하나: { id, title, heads: [소제목], words: [{ en, ko, h }], phrases: [{ en, ko, h }] } (h: heads 번호, 없으면 -1)
+function allVoc_() {
+  const rows = sheet_(SH.voc).getDataRange().getValues(), out = [];
+  for (let i = 1; i < rows.length; i++) { try { out.push(JSON.parse(rows[i][4])); } catch (e) {} }
+  return out.sort((a, b) => a.id - b.id);
+}
+function loadVoc_(id) {
+  const rows = sheet_(SH.voc).getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) if (String(rows[i][0]) === String(id)) { try { return JSON.parse(rows[i][4]); } catch (e) { return null; } }
+  return null;
+}
+const vocSummary_ = v => ({ id: v.id, title: v.title, words: v.words.length, phrases: v.phrases.length });
+function validateVoc_(v) {
+  const str = (x, max) => String(x == null ? '' : x).replace(/\s+/g, ' ').trim().slice(0, max);
+  const title = str(v && v.title, 100).normalize('NFC');  // 맥 파일 이름은 한글이 풀어 쓴(NFD) 꼴일 수 있다
+  if (!title) throw new Error('제목이 없는 세트가 있어요.');
+  const heads = (Array.isArray(v.heads) ? v.heads : []).slice(0, 50).map(h => str(h, 200));
+  const items = list => (Array.isArray(list) ? list : []).map(x => ({ en: str(x && x.en, 200), ko: str(x && x.ko, 300), h: Number.isInteger(x && x.h) && x.h >= 0 && x.h < heads.length ? x.h : -1 })).filter(x => x.en && x.ko);
+  const words = items(v.words), phrases = items(v.phrases);
+  if (!words.length && !phrases.length) throw new Error(title + ': 단어도 구문도 없어요.');
+  if (words.length + phrases.length > 500) throw new Error(title + ': 한 세트에 500개까지 넣을 수 있어요.');
+  // 기록 한 줄(JSON)이 시트 한 칸(5만 자)에 들어가야 한다: 문항마다 영어 두 번(정답·쓴 답) + 뜻 + 키 이름
+  if (words.concat(phrases).reduce((n, x) => n + 2 * x.en.length + x.ko.length + 120, 0) > 48000) throw new Error(title + ': 세트가 너무 커요. 둘로 나눠 올려 주세요.');
+  return { title, heads, words, phrases };
+}
+// 학생에게 보낼 세트: 뜻과 소제목만 (영어 빼고)
+function stripVoc_(v) {
+  const one = (x, i) => ({ n: i + 1, ko: x.ko, h: x.h });
+  return { id: v.id, title: v.title, heads: v.heads || [], words: v.words.map(one), phrases: v.phrases.map(one) };
+}
+// 쓴 답 비교: 대소문자, 문장부호, 하이픈, 괄호 설명, 자리 표시(~, ~ing, doing, A, B, O, S, V, C, N, X, M, P, pp, sb, sth, someone('s), something,
+// "to do"와 끝에 붙은 do)를 빼고 비교한다. 그래서 "defend A from B"는 "defend from"이나 "defend a from b"로 써도 맞고, "trade off"도 "trade-off"와 같다.
+function vocCanon_(s) {
+  return String(s || '').normalize('NFC').replace(/[’‘`]/g, "'").replace(/\([^)]*\)/g, ' ').toLowerCase().replace(/\bto do\b/g, 'to')
+    .replace(/[^a-z0-9']+/g, ' ').split(/\s+/).filter(w => w && !/^([abosvcnxm]'s|a|b|o|s|v|c|n|x|m|p|pp|sb|sth|sb's|someone|someone's|something|ing|ed|doing)$/.test(w)).join(' ').replace(/ do$/, '');
+}
+// 맞는 답으로 칠 꼴들: 단어는 "toward / towards"처럼 / , ;로 나뉜 것 하나하나, 구문은 " / "로 나뉜 구문 하나하나와 "connection/link"처럼 붙은 낱말 중 하나
+function vocAlts_(en, word) {
+  if (word) return /[\/,;]/.test(en) ? en.split(/\s*[\/,;]\s*/).filter(Boolean) : [en];
+  const out = [], expand = a => { const m = a.match(/(\S+)\/(\S+)/); if (m && out.length < 16) { expand(a.replace(m[0], m[1])); expand(a.replace(m[0], m[2])); } else out.push(a); };
+  String(en).split(/\s+\/\s+/).forEach(expand);
+  return out;
+}
+// 괄호 안 글자는 써도 되고 빼도 된다 ("spec(ification)", "tradition(al)")
+function vocOk_(given, en, word) {
+  const g = String(given || '').trim().toLowerCase(); if (!g) return false;
+  const cg = vocCanon_(g);
+  return vocAlts_(en, word).concat([en]).some(a => g === String(a).trim().toLowerCase()
+    || (cg !== '' && (cg === vocCanon_(a) || cg === vocCanon_(String(a).replace(/[()]/g, '')))));
+}
+// 답 키: 단어 "v-번호", 구문 "p-번호". 줄마다 뜻(ko)과 소제목 번호(h)를 같이 남겨 다시 볼 때 쓴다
+function gradeVoc_(v, answers) {
+  const rows = [];
+  [['v', v.words], ['p', v.phrases]].forEach(([kind, list]) => list.forEach((x, i) => {
+    const k = kind + '-' + (i + 1), given = String(answers[k] || '').slice(0, Math.min(200, x.en.length + 40));  // 기록이 시트 한 칸을 넘지 않게
+    rows.push({ k, kind, n: i + 1, h: x.h, ko: x.ko, given, correct: x.en, ok: vocOk_(given, x.en, kind === 'v') });
+  }));
+  return rows;
+}
 function validateWr_(t) {
   const str = v => typeof v === 'string';
   if (!t || !(Number.isInteger(Number(t.id)) && Number(t.id) > 0) || !Array.isArray(t.build) || !t.build.length) throw new Error('라이팅 회차 형식이 잘못됐어요 (id, build 필요).');
@@ -728,6 +847,7 @@ function findRecord_(id) {
   if (d.module === 0 || d.module === 1) rec.module = d.module;
   if (Array.isArray(d.secs)) rec.secs = d.secs;
   if (d.wr) rec.wr = d.wr;
+  if (d.voc) rec.voc = d.voc;
   if (d.essays) rec.essays = d.essays;
   Object.assign(rec, { id, name: String(row[1]).trim(), finishedAt: time_(row[0]), used: Array.isArray(d.used) ? d.used : [], limit: Number(d.limit) || 0 });
   return { row, d, rec };
@@ -750,6 +870,7 @@ function reviewContent_(rec, rows, open) {
     })));
     return sets.length ? { sets, x: !open || open.showAnswers ? rcXFor_(tests, rows) : null } : null;
   }
+  if (rec.voc) return { voc: rec.voc };  // 뜻·정답은 기록 줄(rows)에 있다
   if (rec.wr) {
     const t = loadWr_(rec.wr.id);
     return t ? wrContent_(t, !open || open.showAnswers, rec.essays || {}) : null;
@@ -885,7 +1006,7 @@ function saveResult_(rec, attempt, open) {
   const closed = open === false, showAnswers = !closed && setting_('정답공개') !== 'N';
   // 유형(type)은 정답이 아니라서 남긴다
   const shown = closed ? Object.assign({}, rec, { hidden: true, score: null, parts: {}, rows: [] })
-    : showAnswers ? rec : Object.assign({}, rec, { rows: rec.rows.map(x => ({ k: x.k, t: x.t, mi: x.mi, n: x.n, kind: x.kind, type: x.type, given: x.given, ok: x.ok })) });
+    : showAnswers ? rec : Object.assign({}, rec, { rows: rec.rows.map(x => ({ k: x.k, t: x.t, mi: x.mi, n: x.n, kind: x.kind, type: x.type, h: x.h, ko: x.ko, given: x.given, ok: x.ok })) });
   const out = { result: shown, showAnswers };
   let prev = null;
   withLock_(() => {
@@ -905,15 +1026,17 @@ function appendResult_(rec) {
     const lim = rec.limit > 0 ? ' (제한 ' + rec.limit + '분)' : ' (제한 없음)';
     // 빈칸 모음: "빈칸 5분 2초 (제한 없음)" / 모듈 하나: "M1 12분 3초 (제한 18분)" / 전체: "12분 3초 + 8분 0초"
     const used = rec.wr ? rec.used.map(fmt).join(' + ')
+      : rec.voc ? fmt(rec.used[0])
       : rec.practice ? PRAC_NAME[pracSec_(rec.practice.sec)] + ' ' + fmt(rec.used[0]) + lim
       : rec.lc ? (rec.module != null ? 'M' + (rec.module + 1) + ' ' : '') + fmt(rec.used[0])
       : rec.module != null ? 'M' + (rec.module + 1) + ' ' + fmt(rec.used[0]) + lim
       : rec.used.map(fmt).join(' + ');
-    const label = rec.wr ? '라이팅 ' + rec.wr.title
+    const label = rec.voc ? '구문단어 ' + rec.voc.id + ' · ' + rec.voc.title
+      : rec.wr ? '라이팅 ' + rec.wr.title
       : rec.practice ? PRAC_NAME[pracSec_(rec.practice.sec)] + ' TEST ' + rec.practice.from + (rec.practice.to !== rec.practice.from ? '-' + rec.practice.to : '')
       : rec.lc ? '리스닝 ' + rec.lc.title + (rec.module != null ? ' M' + (rec.module + 1) : '') + (rec.secs ? ' (' + rec.secs.map(s => LC_TYPE_NAME[s]).join(' · ') + ')' : '')
       : 'TEST ' + rec.testId + (rec.module != null ? ' M' + (rec.module + 1) : '') + (rec.secs ? ' (' + rec.secs.map(s => RC_SEC_NAME[s]).join(' · ') + ')' : '');
-    const where = x => (x.t != null ? 'T' + x.t + ' ' : '') + 'M' + (x.mi + 1) + '-' + x.n;
+    const where = x => (x.kind === 'v' || x.kind === 'p' ? (x.kind === 'v' ? '단어 ' : '구문 ') + x.n : (x.t != null ? 'T' + x.t + ' ' : '') + 'M' + (x.mi + 1) + '-' + x.n);
     const wrong = rec.rows.filter(x => !x.ok);
     const sheet = sheet_(SH.results);
     // 기간·반 열은 나중에 생겼다. 예전에 만든 시트면 머리글을 채운다.
@@ -923,16 +1046,16 @@ function appendResult_(rec) {
       part('0w'), part('0r'), part('1w'), part('1r'), used,
       clip_(wrong.map(where).join(', '), 5000),
       clip_(wrong.map(x => where(x) + ': ' + (x.given || '(빈칸)') + ' → ' + (x.kind === 'w' ? x.full : x.correct)).join('; '), 5000),
-      JSON.stringify({ used: rec.used, rows: rec.rows, module: rec.module, limit: rec.limit, practice: rec.practice || null, lc: rec.lc || null, secs: rec.secs || undefined, parts: rec.lc || rec.wr ? rec.parts : undefined, wr: rec.wr || undefined, essays: rec.essays || undefined }), rec.id,
+      JSON.stringify({ used: rec.used, rows: rec.rows, module: rec.module, limit: rec.limit, practice: rec.practice || null, lc: rec.lc || null, secs: rec.secs || undefined, parts: rec.lc || rec.wr || rec.voc ? rec.parts : undefined, wr: rec.wr || undefined, voc: rec.voc || undefined, essays: rec.essays || undefined }), rec.id,
       rec.period || '', rec.cls || ''
     ]);
   }
 }
-// 유형별 [맞은 수, 문항 수]: 리딩 '0w' '0r' '1w' '1r', 모아 풀기 'w'(빈칸) 'd'(Daily Life) 'a'(Academic), 리스닝 'resp' 'conv' 'ann' 'talk'
+// 유형별 [맞은 수, 문항 수]: 리딩 '0w' '0r' '1w' '1r', 모아 풀기 'w'(빈칸) 'd'(Daily Life) 'a'(Academic), 리스닝 'resp' 'conv' 'ann' 'talk', 구문단어 'vw'(단어) 'vp'(구문)
 // practice: 모아 풀기 기록의 { from, to, sec } (아니면 null)
 function partsOf_(rows, practice) {
   const key = { response: 'resp', conversation: 'conv', announcement: 'ann', talk: 'talk' }, parts = {};
-  rows.forEach(x => { const k = x.kind === 'l' ? key[x.type] : practice ? (x.kind === 'w' ? 'w' : practice.sec === 'academic' ? 'a' : 'd') : x.mi + x.kind; if (!k) return;
+  rows.forEach(x => { const k = x.kind === 'l' ? key[x.type] : x.kind === 'v' ? 'vw' : x.kind === 'p' ? 'vp' : practice ? (x.kind === 'w' ? 'w' : practice.sec === 'academic' ? 'a' : 'd') : x.mi + x.kind; if (!k) return;
     const p = parts[k] || (parts[k] = [0, 0]); p[1]++; if (x.ok) p[0]++; });
   return parts;
 }
@@ -951,9 +1074,10 @@ function time_(v) { return v instanceof Date ? v.getTime() : Number(v) || 0; }
 // 결과 시트의 회차 칸("TEST 5 M1", "TEST 5 M1 (Daily Life · Academic Passage)", "빈칸 TEST 1-10", "Academic TEST 1-10", "리스닝 NEW TOEFL 3 TEST 1 M2 (Best Response · Conversation)")에서 기록 종류를 읽는다
 // 리스닝 Module 1 + 2 이어 풀기는 M이 없다 ("리스닝 NEW TOEFL 3 TEST 1 (Conversation)")
 function labelInfo_(label) {
-  const s = String(label == null ? '' : label).trim(), out = { testId: null, module: null, practice: null, lc: null, secs: null, wr: null };
+  const s = String(label == null ? '' : label).trim(), out = { testId: null, module: null, practice: null, lc: null, secs: null, wr: null, voc: null };
   let m;
   if ((m = s.match(/^라이팅 (NEW TOEFL 3 TEST (\d+))$/))) return Object.assign(out, { wr: { id: +m[2], title: m[1] } });
+  if ((m = s.match(/^구문단어 (\d+) · (.+)$/))) return Object.assign(out, { voc: { id: +m[1], title: m[2] } });
   if ((m = s.match(/^(빈칸|Daily Life|Academic) TEST (\d+)(?:-(\d+))?$/))) {
     const sec = Object.keys(PRAC_NAME).find(k => PRAC_NAME[k] === m[1]);
     return Object.assign(out, { practice: Object.assign({ from: +m[2], to: +(m[3] || m[2]) }, sec === 'words' ? {} : { sec }) });
@@ -977,6 +1101,7 @@ function labelInfo_(label) {
 function recOpen_(info, open) {
   if (info.practice) return true;
   if (info.wr) return wrOpen_(open, info.wr.id);
+  if (info.voc) return vocOpen_(open, info.voc.id);
   if (info.testId != null) return !open.rc || open.rc.has(Number(info.testId));
   if (info.lc && /^(new|tpo)-\d+$/.test(info.lc.id || '')) {
     const p = info.lc.id.split('-'), s = p[0] === 'new' ? open.lcNew : open.lcTpo;
@@ -1018,6 +1143,8 @@ function sheet_(name) {
     sheet.appendRow(['ID', '세트', '회차', '문제 수', 'JSON']);
   } else if (name === SH.wr) {
     sheet.appendRow(['회차', '제목', '재배열 수', 'JSON']);
+  } else if (name === SH.voc) {
+    sheet.appendRow(['세트', '제목', '단어 수', '구문 수', 'JSON']);
   } else if (name === SH.lcx) {
     sheet.appendRow(LCX_HEADERS);
   } else if (name === SH.results) {
