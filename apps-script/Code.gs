@@ -210,7 +210,9 @@ const API = {
     const att = String(r.attempt || '').replace(/[^\w-]/g, '').slice(0, 40), prev = att && CacheService.getScriptCache().get('att:' + att);
     if (prev) { const o = JSON.parse(prev); if (!o.result.hidden) o.content = spContent_(t, o.showAnswers); return o; }
     const recs = spRecs_(t, r.recs), rows = spItems_(t).map(x => ({ k: x.k, kind: x.kind, n: x.n, ok: !!recs[x.k] }));
-    const id = newId_(), file = spRecFolder_().createFile(id + '.json', JSON.stringify({ id, clips: recs }), 'application/json');
+    // diag: 기기·녹음 형식·파일 크기 기록 (녹음이 안 될 때 원인을 보려고 녹음 파일에만 둔다)
+    const diag = r.diag && typeof r.diag === 'object' ? clip_(JSON.stringify(r.diag), 4000) : '';
+    const id = newId_(), file = spRecFolder_().createFile(id + '.json', JSON.stringify({ id, clips: recs, diag }), 'application/json');
     const score = rows.filter(x => x.ok).length;
     const rec = {
       id, name: clip_(r.name, 60), period: clip_(r.period, 40), cls: clip_(r.cls, 60), testId: null, sp: { id: t.id, title: spTitle_(t.id), file: file.getId() }, module: null, limit: 0,
@@ -791,7 +793,8 @@ function spRecs_(t, raw) {
   let total = 0;
   Object.keys(raw && typeof raw === 'object' ? raw : {}).forEach(k => {
     const x = raw[k];
-    if (!keys.has(k) || !x || typeof x.data !== 'string' || !x.data) return;
+    // 1KB도 안 되는 파일은 소리가 없는 빈 껍데기다 (아이폰 사파리 WebM이 5바이트만 남긴 적이 있다): 녹음 없음으로 센다
+    if (!keys.has(k) || !x || typeof x.data !== 'string' || x.data.length < 1336) return;
     if (!/^audio\/[\w.+-]+(;[\w=.,\s-]*)?$/.test(String(x.mime || '')) || x.mime.length > 80) throw new Error('녹음 형식이 잘못됐어요.');
     if (!/^[A-Za-z0-9+/]+={0,2}$/.test(x.data)) throw new Error('녹음 파일이 깨졌어요.');
     if (x.data.length > 4 * 1048576) throw new Error('녹음 하나가 너무 커요.');
