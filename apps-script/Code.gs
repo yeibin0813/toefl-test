@@ -5,7 +5,9 @@
 // 입장 코드가 맞는 학생에게만 이 서버가 꺼내 보낸다.
 // 리스닝 해설(문항별 해설·해석과 묶음별 스크립트·해석)은 "리스닝해설" 시트에 회차마다 한 줄로 있고, 정답 공개일 때 다시 보기에서만 보낸다.
 
-const SH = { settings: '설정', tests: '문제', results: '결과', lc: '리스닝', lcx: '리스닝해설', wr: '라이팅', voc: '구문단어' };
+const SH = { settings: '설정', tests: '문제', results: '결과', lc: '리스닝', lcx: '리스닝해설', wr: '라이팅', voc: '구문단어', sp: '스피킹' };
+// 학생 스피킹 녹음을 두는 드라이브 폴더 (기록 하나당 파일 하나, 선생님 드라이브에만 있다)
+const SP_REC_FOLDER = '토플 스피킹 녹음';
 const LC_FOLDER = '토플 리스닝 음원';
 // 리스닝 세트 이름. 회차 제목은 저장된 값 대신 늘 "세트 이름 + TEST 번호"로 만든다 (예: NEW TOEFL 3 TEST 1).
 const LC_SET_NAME = { new: 'NEW TOEFL 3', tpo: 'TPO' };
@@ -49,7 +51,8 @@ const API = {
     checkCode_(r.code);
     const open = openNow_(r);
     return { tests: allTests_().filter(t => rcOpen_(open, t.id)).map(testSummary_), lcTests: allLc_().filter(t => lcOpen_(open, t)).map(lcSummary_),
-      wrTests: allWr_().filter(t => wrOpen_(open, t.id)).map(wrSummary_), vocSets: allVoc_().filter(v => vocOpen_(open, v.id)).map(vocSummary_) };
+      wrTests: allWr_().filter(t => wrOpen_(open, t.id)).map(wrSummary_), wrKeys: allWr_().filter(t => wrKeyOpen_(open, t.id)).map(wrSummary_),
+      vocSets: allVoc_().filter(v => vocOpen_(open, v.id)).map(vocSummary_), spTests: allSp_().filter(t => spOpen_(open, t.id)).map(spSummary_) };
   },
   getTest(r) {
     checkCode_(r.code);
@@ -136,9 +139,16 @@ const API = {
     checkCode_(r.code);
     const t = loadWr_(r.id), open = openNow_(r);
     if (!t || !wrOpen_(open, t.id)) throw new Error('지금은 열려 있지 않은 회차예요.');
-    return { test: stripWr_(t), showAnswers: open.showAnswers };
+    return { test: stripWr_(t), showAnswers: wrKeyOpen_(open, t.id) };
   },
-  // 재배열만 채점한다. 이메일·토론 글은 기록에 남기고, 정답 공개면 모범 답안을 함께 돌려준다
+  // 라이팅 해설지: 선생님이 「라이팅 해설지 공개 회차」에 적은 회차만 (풀지 않았어도 볼 수 있다)
+  getWrKey(r) {
+    checkCode_(r.code);
+    const t = loadWr_(r.id);
+    if (!t || !wrKeyOpen_(openNow_(r), t.id)) throw new Error('이 회차 해설지는 아직 열리지 않았어요.');
+    return { key: wrKey_(t) };
+  },
+  // 재배열만 채점한다. 이메일·토론 글은 기록에 남기고, 그 회차 해설지가 열려 있으면 정답·모범 답안·해설을 함께 돌려준다 (정답 공개 설정과 따로)
   submitWriting(r) {
     checkCode_(r.code);
     const t = loadWr_(r.id);
@@ -149,7 +159,7 @@ const API = {
       id: newId_(), name: clip_(r.name, 60), period: clip_(r.period, 40), cls: clip_(r.cls, 60), testId: null, wr: { id: t.id, title: wrTitle_(t.id) }, module: null, limit: 0,
       finishedAt: Date.now(), used: (r.used || []).map(Number), score, total: rows.length, parts: { build: [score, rows.length] }, rows, essays
     };
-    const open = openNow_(r), out = saveResult_(rec, r.attempt, wrOpen_(open, t.id));
+    const open = openNow_(r), out = saveResult_(rec, r.attempt, wrOpen_(open, t.id), wrKeyOpen_(open, t.id));
     if (!out.result.hidden) out.content = wrContent_(t, out.showAnswers, essays);
     return out;
   },
@@ -174,6 +184,48 @@ const API = {
       finishedAt: Date.now(), used: (r.used || []).map(Number), score, total: rows.length, parts: partsOf_(rows, null), rows
     };
     return saveResult_(rec, r.attempt, vocOpen_(openNow_(r), v.id));
+  },
+
+  // ---------- 스피킹 ----------
+  // 학생에게는 상황 글과 답하는 시간만 보낸다 (따라 말할 문장·예시 답안은 제출한 뒤 정답 공개일 때만)
+  getSpeaking(r) {
+    checkCode_(r.code);
+    const t = loadSp_(r.id), open = openNow_(r);
+    if (!t || !spOpen_(open, t.id)) throw new Error('지금은 열려 있지 않은 회차예요.');
+    return { test: stripSp_(t), showAnswers: open.showAnswers };
+  },
+  // 그림·음성·인터뷰 영상·삐 소리 묶음 ({ id, clips: { "q1.mp3": base64, "img1.jpg": ..., "q8.mp4": ..., "beep.mp3": ... } })
+  getSpPack(r) {
+    checkCode_(r.code);
+    const t = loadSp_(r.id);
+    if (!t || !spOpen_(openNow_(r), t.id)) throw new Error('지금은 열려 있지 않은 회차예요.');
+    return { rawPack: lcFile_('sp-' + t.id + '.json').getBlob().getDataAsString() };
+  },
+  // 녹음 제출: recs = { "l-1": { mime, data: base64 }, ..., "i-8": ... }. 녹음은 드라이브 "토플 스피킹 녹음" 폴더에 기록 하나당 파일 하나로 둔다
+  submitSpeaking(r) {
+    checkCode_(r.code);
+    const t = loadSp_(r.id);
+    if (!t) throw new Error('회차를 찾을 수 없어요.');
+    // 다시 보내기(같은 응시 ID)면 녹음을 또 저장하지 않고 처음 결과를 돌려준다
+    const att = String(r.attempt || '').replace(/[^\w-]/g, '').slice(0, 40), prev = att && CacheService.getScriptCache().get('att:' + att);
+    if (prev) { const o = JSON.parse(prev); if (!o.result.hidden) o.content = spContent_(t, o.showAnswers); return o; }
+    const recs = spRecs_(t, r.recs), rows = spItems_(t).map(x => ({ k: x.k, kind: x.kind, n: x.n, ok: !!recs[x.k] }));
+    const id = newId_(), file = spRecFolder_().createFile(id + '.json', JSON.stringify({ id, clips: recs }), 'application/json');
+    const score = rows.filter(x => x.ok).length;
+    const rec = {
+      id, name: clip_(r.name, 60), period: clip_(r.period, 40), cls: clip_(r.cls, 60), testId: null, sp: { id: t.id, title: spTitle_(t.id), file: file.getId() }, module: null, limit: 0,
+      finishedAt: Date.now(), used: (r.used || []).map(Number), score, total: rows.length, parts: partsOf_(rows, null), rows
+    };
+    const open = openNow_(r), out = saveResult_(rec, r.attempt, spOpen_(open, t.id));
+    if (!out.result.hidden) out.content = spContent_(t, out.showAnswers);
+    return out;
+  },
+  // 내 녹음 듣기 (내 기록만)
+  getRecording(r) {
+    checkCode_(r.code);
+    const who = who_(r), f = findRecord_(r.id);
+    if (!f || !mine_(who, f.row[1], f.row[15]) || !f.rec.sp || !f.rec.sp.file) throw new Error('녹음을 찾을 수 없어요.');
+    return { rawPack: DriveApp.getFileById(f.rec.sp.file).getBlob().getDataAsString() };
   },
 
   // ---------- 내 기록 ----------
@@ -212,10 +264,12 @@ const API = {
       if (!rows.length) return hidden();
       if (cut) rec.orig = { score: Number(row[3]) || 0, total: Number(row[4]) || 0 };
     }
+    // 라이팅은 정답 공개 대신 그 회차 해설지가 열렸는지로 정답·모범 답안을 보여 준다
+    const show = rec.wr ? wrKeyOpen_(open, rec.wr.id) : open.showAnswers;
     const content = reviewContent_(rec, rows, open);
-    if (!open.showAnswers) rows = rows.map(x => ({ k: x.k, t: x.t, mi: x.mi, n: x.n, kind: x.kind, type: x.type, h: x.h, ko: x.ko, given: x.given, ok: x.ok }));
+    if (!show) rows = rows.map(x => ({ k: x.k, t: x.t, mi: x.mi, n: x.n, kind: x.kind, type: x.type, h: x.h, ko: x.ko, given: x.given, ok: x.ok }));
     const score = rows.filter(x => x.ok).length;
-    return { result: Object.assign(rec, { score, total: rows.length, parts: rec.wr ? { build: [score, rows.length] } : partsOf_(rows, rec.practice), rows, cut }), showAnswers: open.showAnswers, content };
+    return { result: Object.assign(rec, { score, total: rows.length, parts: rec.wr ? { build: [score, rows.length] } : partsOf_(rows, rec.practice), rows, cut }), showAnswers: show, content };
   },
   // 약점 분석: 내 기록(지금 열린 회차만)에서 과목·유형별 정답률(stats)과, 틀렸던 문항의 문제(정답 뺀 것)·틀린 횟수(groups)를 보낸다.
   // 문항 키: 리딩 "r|회차|모듈|번호", 빈칸 "w|회차|모듈|번호", 리스닝 "l|회차 ID|모듈|번호"
@@ -227,7 +281,7 @@ const API = {
       for (let i = 0; i < n; i++) {
         if (!mine_(who, head[i][0], cls[i][0])) continue;
         let d = null; try { d = JSON.parse(sheet.getRange(i + 2, 13).getValue()); } catch (e) {}
-        if (!d || !Array.isArray(d.rows) || d.wr || d.voc) continue;  // 라이팅·구문단어는 약점 분석에 넣지 않는다
+        if (!d || !Array.isArray(d.rows) || d.wr || d.voc || d.sp) continue;  // 라이팅·구문단어·스피킹은 약점 분석에 넣지 않는다
         const testId = labelInfo_(head[i][1]).testId;
         d.rows.forEach(x => {
           const k = d.lc ? ['l', d.lc.id, x.mi, x.n].join('|') : [x.kind === 'w' ? 'w' : 'r', x.t != null ? x.t : testId, x.mi, x.n].join('|');
@@ -322,6 +376,8 @@ const API = {
     if (s.lcTpo != null) setSetting_('리스닝TPO열린회차', String(s.lcTpo).trim());
     if (s.wr != null) setSetting_('라이팅열린회차', String(s.wr).trim());
     if (s.voc != null) setSetting_('단어열린세트', String(s.voc).trim());
+    if (s.wrKey != null) setSetting_('라이팅해설공개', String(s.wrKey).trim());
+    if (s.sp != null) setSetting_('스피킹열린회차', String(s.sp).trim());
     if (s.extra != null) setSetting_('개별열린회차', JSON.stringify(extraOpen_(s.extra)));
     return { settings: settings_() };
   },
@@ -399,7 +455,7 @@ const API = {
   saveAudio(r) {
     checkPw_(r.pw);
     const name = String(r.name || '');
-    if (!/^(new|tpo)-\d+_m[12]\.json$/.test(name)) throw new Error('음원 파일 이름이 잘못됐어요: ' + name);
+    if (!/^((new|tpo)-\d+_m[12]|sp-\d+)\.json$/.test(name)) throw new Error('음원 파일 이름이 잘못됐어요: ' + name);
     const folder = lcFolder_(true), old = folder.searchFiles(ownedQ_(name));
     while (old.hasNext()) old.next().setTrashed(true);
     const f = folder.createFile(name, String(r.data || ''), 'application/json');
@@ -430,6 +486,41 @@ const API = {
     return { tests: allWr_().map(wrSummary_) };
   },
   listVoc(r) { checkPw_(r.pw); return { sets: allVoc_().map(vocSummary_) }; },
+  // 스피킹 회차 목록과, 드라이브 음원 폴더에 그 회차 묶음(sp-N.json)이 있는지
+  listSp(r) {
+    checkPw_(r.pw);
+    const names = lcFolders_().length ? lcNames_(lcFolder_(false)) : new Set();
+    return { tests: allSp_().map(t => Object.assign(spSummary_(t), { pack: names.has('sp-' + t.id + '.json') })) };
+  },
+  saveSp(r) {
+    checkPw_(r.pw);
+    const list = Array.isArray(r.tests) ? r.tests : (r.tests && r.tests.tests) || [];
+    if (!list.length) throw new Error('추가할 스피킹 회차가 없어요.');
+    list.forEach(validateSp_);
+    let added = 0, updated = 0;
+    withLock_(() => {
+      const sheet = sheet_(SH.sp), rows = sheet.getDataRange().getValues(), idx = {}, fresh = [];
+      rows.forEach((row, i) => { if (i) idx[String(row[0])] = i + 1; });
+      list.forEach(t => {
+        const line = [t.id, spTitle_(t.id), t.lnr.items.length + t.iv.items.length, JSON.stringify(t)];
+        if (idx[t.id]) { sheet.getRange(idx[t.id], 1, 1, 4).setValues([line]); updated++; } else fresh.push(line);
+      });
+      added = appendRows_(sheet, fresh);
+    });
+    return { added, updated, tests: allSp_().map(spSummary_) };
+  },
+  deleteSp(r) {
+    checkPw_(r.pw);
+    withLock_(() => deleteRows_(SH.sp, 0, r.id));
+    return { tests: allSp_().map(spSummary_) };
+  },
+  // 선생님이 학생 녹음 듣기
+  adminRecording(r) {
+    checkPw_(r.pw);
+    const f = findRecord_(r.id);
+    if (!f || !f.rec.sp || !f.rec.sp.file) throw new Error('녹음을 찾을 수 없어요.');
+    return { rawPack: DriveApp.getFileById(f.rec.sp.file).getBlob().getDataAsString() };
+  },
   // 구문단어 세트 올리기: 제목이 같은 세트가 있으면 그 번호 그대로 내용을 바꾸고, 없으면 새 번호를 붙인다
   saveVoc(r) {
     checkPw_(r.pw);
@@ -474,16 +565,16 @@ const API = {
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i]; if (!row[13]) continue;
       let detail = null; try { detail = JSON.parse(row[12]); } catch (e) {}
-      const practice = detail && detail.practice || null, lc = detail && detail.lc || null, wr = detail && detail.wr || null, voc = detail && detail.voc || null;
+      const practice = detail && detail.practice || null, lc = detail && detail.lc || null, wr = detail && detail.wr || null, voc = detail && detail.voc || null, sp = detail && detail.sp || null;
       out.push({
         id: String(row[13]), finishedAt: row[0] instanceof Date ? row[0].getTime() : Number(row[0]) || 0,
-        name: String(row[1]), practice, lc, wr, voc, secs: detail && detail.secs || null, period: String(row[14] || ''), cls: String(row[15] || ''),
-        testId: practice || lc || wr || voc ? null : Number((String(row[2]).match(/TEST (\d+)/) || [])[1]) || String(row[2]),
+        name: String(row[1]), practice, lc, wr, voc, sp, secs: detail && detail.secs || null, period: String(row[14] || ''), cls: String(row[15] || ''),
+        testId: practice || lc || wr || voc || sp ? null : Number((String(row[2]).match(/TEST (\d+)/) || [])[1]) || String(row[2]),
         module: detail && (detail.module === 0 || detail.module === 1) ? detail.module : (/ M1$/.test(String(row[2])) ? 0 : / M2$/.test(String(row[2])) ? 1 : null),
         limit: detail && Number(detail.limit) || 0,
         score: Number(row[3]) || 0, total: Number(row[4]) || 0,
         // 모듈별 점수 칸("3/10")은 예전에 날짜로 바뀌어 저장된 것이 있어서, 상세 칸이 있으면 거기서 다시 센다
-        parts: lc || wr || voc ? detail.parts || {} : !practice && detail && Array.isArray(detail.rows) ? partText_(partsOf_(detail.rows, false))
+        parts: lc || wr || voc || sp ? detail.parts || {} : !practice && detail && Array.isArray(detail.rows) ? partText_(partsOf_(detail.rows, false))
           : { '0w': row[5], '0r': row[6], '1w': row[7], '1r': row[8] }, usedText: String(row[9]),
         wrong: String(row[10]), rows: detail && detail.rows || null, used: detail && detail.used || null
       });
@@ -501,7 +592,7 @@ const API = {
 // ---------- 설정 ----------
 function settings_() {
   return { code: setting_('입장코드'), open: setting_('열린회차'), showAnswers: setting_('정답공개') !== 'N', pwIsDefault: setting_('관리자비밀번호') === DEFAULT_PW,
-    lcNew: setting_('리스닝새열린회차'), lcTpo: setting_('리스닝TPO열린회차'), wr: setting_('라이팅열린회차'), voc: setting_('단어열린세트'), extra: extraOpen_(setting_('개별열린회차')) };
+    lcNew: setting_('리스닝새열린회차'), lcTpo: setting_('리스닝TPO열린회차'), wr: setting_('라이팅열린회차'), voc: setting_('단어열린세트'), wrKey: setting_('라이팅해설공개'), sp: setting_('스피킹열린회차'), extra: extraOpen_(setting_('개별열린회차')) };
 }
 function setting_(key) {
   const rows = sheet_(SH.settings).getDataRange().getValues();
@@ -529,11 +620,11 @@ function checkCode_(code) {
 function openNow_(r) {
   const rows = sheet_(SH.settings).getDataRange().getValues();
   const get = key => { for (const row of rows) if (String(row[0]) === key) return String(row[1] == null ? '' : row[1]).replace(/^'/, '').trim(); return ''; };
-  const open = { rc: parseOpen_(get('열린회차')), lcNew: parseOpen_(get('리스닝새열린회차')), lcTpo: parseOpen_(get('리스닝TPO열린회차')), wr: parseOpen_(get('라이팅열린회차')), voc: parseOpen_(get('단어열린세트')), showAnswers: get('정답공개') !== 'N' };
+  const open = { rc: parseOpen_(get('열린회차')), lcNew: parseOpen_(get('리스닝새열린회차')), lcTpo: parseOpen_(get('리스닝TPO열린회차')), wr: parseOpen_(get('라이팅열린회차')), voc: parseOpen_(get('단어열린세트')), wrKey: parseOpen_(get('라이팅해설공개')), sp: parseOpen_(get('스피킹열린회차')), showAnswers: get('정답공개') !== 'N' };
   if (!r) return open;
   const name = norm_(r.name), cls = norm_(r.cls);
   extraOpen_(get('개별열린회차')).filter(x => (!x.cls || norm_(x.cls) === cls) && (!x.name || norm_(x.name) === name)).forEach(x => {
-    [['rc', x.open], ['lcNew', x.lcNew], ['lcTpo', x.lcTpo], ['wr', x.wr], ['voc', x.voc]].forEach(([k, v]) => {
+    [['rc', x.open], ['lcNew', x.lcNew], ['lcTpo', x.lcTpo], ['wr', x.wr], ['voc', x.voc], ['sp', x.sp]].forEach(([k, v]) => {
       const add = parseOpen_(v);
       if (add && !(k === 'rc' && !open.rc)) open[k] = new Set([...(open[k] || []), ...add]);
     });
@@ -544,8 +635,8 @@ function openNow_(r) {
 function extraOpen_(v) {
   if (typeof v === 'string') { try { v = v ? JSON.parse(v) : []; } catch (e) { v = []; } }
   const str = (x, max) => String(x == null ? '' : x).trim().slice(0, max);
-  return (Array.isArray(v) ? v : []).slice(0, 300).map(x => ({ cls: str(x && x.cls, 60), name: str(x && x.name, 60), open: str(x && x.open, 200), lcNew: str(x && x.lcNew, 200), lcTpo: str(x && x.lcTpo, 200), wr: str(x && x.wr, 200), voc: str(x && x.voc, 200) }))
-    .filter(x => (x.cls || x.name) && (x.open || x.lcNew || x.lcTpo || x.wr || x.voc));
+  return (Array.isArray(v) ? v : []).slice(0, 300).map(x => ({ cls: str(x && x.cls, 60), name: str(x && x.name, 60), open: str(x && x.open, 200), lcNew: str(x && x.lcNew, 200), lcTpo: str(x && x.lcTpo, 200), wr: str(x && x.wr, 200), voc: str(x && x.voc, 200), sp: str(x && x.sp, 200) }))
+    .filter(x => (x.cls || x.name) && (x.open || x.lcNew || x.lcTpo || x.wr || x.voc || x.sp));
 }
 function parseOpen_(s) {
   if (!s) return null;
@@ -562,6 +653,9 @@ const rcOpen_ = (open, id) => !open.rc || open.rc.has(Number(id));
 const wrOpen_ = (open, id) => !!open.wr && open.wr.has(Number(id));
 // 구문단어 세트도 열린 세트 칸이 비어 있으면 아무 세트도 열리지 않는다
 const vocOpen_ = (open, id) => !!open.voc && open.voc.has(Number(id));
+// 라이팅 해설지(정답·모범 답안·해설)는 「라이팅 해설지 공개 회차」에 적은 회차만, 스피킹은 「스피킹 열린 회차」에 적은 회차만
+const wrKeyOpen_ = (open, id) => !!open.wrKey && open.wrKey.has(Number(id));
+const spOpen_ = (open, id) => !!open.sp && open.sp.has(Number(id));
 const lcOpen_ = (open, t) => { const s = t.set === 'new' ? open.lcNew : open.lcTpo; return !!s && s.has(Number(t.no)); };
 // from~to 회차 중 열린 회차의 빈칸 지문: [{ t, mi, start, text }]
 // 모아 풀기 지문: from~to 회차 중 열린 회차에서 sec 섹션 지문만 (정답 포함, 서버 안에서만 쓴다)
@@ -656,6 +750,66 @@ function loadWr_(id) {
 }
 const wrSummary_ = t => ({ id: t.id, title: wrTitle_(t.id), build: t.build.length });
 
+// ---------- 스피킹 문제 ----------
+// 회차 하나: { id, lnr: { situation, items: [{ n, script, secs }] }, iv: { situation, items: [{ n, script, secs, model }] } }
+// lnr: Listen and Repeat (7문장, 문장이 정답), iv: Take an Interview (4질문, model은 예시 답안). 그림·음원·영상은 드라이브 음원 폴더의 sp-N.json에 있다
+const spTitle_ = id => 'NEW TOEFL 3 TEST ' + id;
+function allSp_() {
+  const rows = sheet_(SH.sp).getDataRange().getValues(), out = [];
+  for (let i = 1; i < rows.length; i++) { try { out.push(JSON.parse(rows[i][3])); } catch (e) {} }
+  return out.sort((a, b) => a.id - b.id);
+}
+function loadSp_(id) {
+  const rows = sheet_(SH.sp).getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) if (String(rows[i][0]) === String(id)) { try { return JSON.parse(rows[i][3]); } catch (e) { return null; } }
+  return null;
+}
+const spSummary_ = t => ({ id: t.id, title: spTitle_(t.id), lnr: t.lnr.items.length, iv: t.iv.items.length });
+function validateSp_(t) {
+  const str = v => typeof v === 'string' && v.trim() !== '', okItems = (a, model) => Array.isArray(a) && a.length > 0 && a.every(x => x && Number.isInteger(x.n) && str(x.script) && Number(x.secs) > 0 && Number(x.secs) <= 120 && (!model || str(x.model)));
+  if (!t || !(Number.isInteger(Number(t.id)) && Number(t.id) > 0)) throw new Error('스피킹 회차 형식이 잘못됐어요 (id 필요).');
+  t.id = Number(t.id);
+  if (!t.lnr || !str(t.lnr.situation) || !okItems(t.lnr.items)) throw new Error('TEST ' + t.id + ': Listen and Repeat 문항이 잘못됐어요.');
+  if (!t.iv || !str(t.iv.situation) || !okItems(t.iv.items, true)) throw new Error('TEST ' + t.id + ': 인터뷰 문항(질문·예시 답안)이 잘못됐어요.');
+}
+// 학생에게 보낼 회차: 상황 글과 문항 번호·답하는 시간만
+function stripSp_(t) {
+  const one = x => ({ n: x.n, secs: Number(x.secs) });
+  return { id: t.id, title: spTitle_(t.id), lnr: { situation: t.lnr.situation, items: t.lnr.items.map(one) }, iv: { situation: t.iv.situation, items: t.iv.items.map(one) } };
+}
+// 제출한 뒤 보여 줄 것: 인터뷰 질문 글은 늘, 따라 말할 문장(답지)과 예시 답안은 정답 공개일 때만
+function spContent_(t, withAnswers) {
+  return { sp: { id: t.id, title: spTitle_(t.id),
+    lnr: { situation: t.lnr.situation, items: t.lnr.items.map(x => ({ n: x.n, script: withAnswers ? x.script : '' })) },
+    iv: { situation: t.iv.situation, items: t.iv.items.map(x => ({ n: x.n, script: x.script, model: withAnswers ? x.model : '' })) } } };
+}
+// 녹음 키: 따라 말하기 "l-번호", 인터뷰 "i-번호"
+const spItems_ = t => t.lnr.items.map(x => ({ k: 'l-' + x.n, kind: 'sl', n: x.n })).concat(t.iv.items.map(x => ({ k: 'i-' + x.n, kind: 'si', n: x.n })));
+// 받은 녹음 다듬기: 이 회차의 문항 키만, 소리 형식(mime)과 base64만, 하나에 4MB·모두 20MB까지
+function spRecs_(t, raw) {
+  const out = {}, keys = new Set(spItems_(t).map(x => x.k));
+  let total = 0;
+  Object.keys(raw && typeof raw === 'object' ? raw : {}).forEach(k => {
+    const x = raw[k];
+    if (!keys.has(k) || !x || typeof x.data !== 'string' || !x.data) return;
+    if (!/^audio\/[\w.+-]+(;[\w=.,\s-]*)?$/.test(String(x.mime || '')) || x.mime.length > 80) throw new Error('녹음 형식이 잘못됐어요.');
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(x.data)) throw new Error('녹음 파일이 깨졌어요.');
+    if (x.data.length > 4 * 1048576) throw new Error('녹음 하나가 너무 커요.');
+    total += x.data.length; out[k] = { mime: x.mime, data: x.data };
+  });
+  if (total > 20 * 1048576) throw new Error('녹음이 너무 커요.');
+  return out;
+}
+// 녹음 폴더: 한 번 찾은(또는 만든) 폴더 ID를 기억해 두고 쓴다
+function spRecFolder_() {
+  const props = PropertiesService.getScriptProperties(), id = props.getProperty('spRecFolder');
+  if (id) { try { const f = DriveApp.getFolderById(id); if (!f.isTrashed()) return f; } catch (e) {} }
+  let f = null;
+  withLock_(() => { const it = DriveApp.searchFolders(ownedQ_(SP_REC_FOLDER)); f = it.hasNext() ? it.next() : DriveApp.createFolder(SP_REC_FOLDER); });
+  props.setProperty('spRecFolder', f.getId());
+  return f;
+}
+
 // ---------- 구문단어 세트 ----------
 // 세트 하나: { id, title, heads: [소제목], words: [{ en, ko, h }], phrases: [{ en, ko, h }] } (h: heads 번호, 없으면 -1)
 function allVoc_() {
@@ -716,12 +870,20 @@ function gradeVoc_(v, answers) {
   }));
   return rows;
 }
+// 해설지: 정답 문장, 모범 답안, 해설(x: { build: { 번호: 해설 }, email: { ko, plan, expr }, disc: {...} })
+function wrKey_(t) {
+  const x = t.x || {};
+  return { id: t.id, title: wrTitle_(t.id), build: t.build.map(b => ({ n: b.n, ctx: b.ctx, answer: b.answer, x: (x.build || {})[b.n] || '' })),
+    email: { situation: t.email.situation, task: t.email.task, model: t.email.model, x: x.email || null },
+    disc: { prof: t.disc.prof, students: t.disc.students, question: t.disc.question, model: t.disc.model, x: x.disc || null } };
+}
 function validateWr_(t) {
   const str = v => typeof v === 'string';
   if (!t || !(Number.isInteger(Number(t.id)) && Number(t.id) > 0) || !Array.isArray(t.build) || !t.build.length) throw new Error('라이팅 회차 형식이 잘못됐어요 (id, build 필요).');
   t.id = Number(t.id);
   t.build.forEach(b => { if (!Array.isArray(b.slots) || !b.slots.every(x => x && str(x.w) && str(x.end)) || !b.slots.some(x => !x.fixed)) throw new Error('TEST ' + t.id + ' 재배열 ' + b.n + '번이 잘못됐어요.'); });
   if (!t.email || !str(t.email.task) || !t.disc || !str(t.disc.question)) throw new Error('TEST ' + t.id + ': 이메일·토론 문제가 없어요.');
+  if (t.x != null && (typeof t.x !== 'object' || Array.isArray(t.x) || typeof t.x.build !== 'object')) throw new Error('TEST ' + t.id + ': 해설(x) 형식이 잘못됐어요.');
 }
 // 학생에게 보낼 문제: 재배열은 고정 조각과 빈칸 자리만 두고, 옮길 조각은 쓰지 않는 조각과 섞어 보낸다 (정답 순서가 드러나지 않게). 정답·모범 답안은 뺀다
 function stripWr_(t) {
@@ -743,7 +905,7 @@ function gradeWr_(t, build) {
 }
 // 다시 보기·결과 화면에 보낼 라이팅: 재배열 앞 문장, 이메일·토론 문제와 학생 글, 정답 공개면 모범 답안
 function wrContent_(t, withModels, essays) {
-  return { wr: { id: t.id, title: wrTitle_(t.id), build: t.build.map(b => ({ n: b.n, ctx: b.ctx })),
+  return { wr: { id: t.id, title: wrTitle_(t.id), build: t.build.map(b => ({ n: b.n, ctx: b.ctx })), x: withModels && t.x ? t.x : null,
     email: { situation: t.email.situation, task: t.email.task, model: withModels ? t.email.model : '' },
     disc: { prof: t.disc.prof, students: t.disc.students, question: t.disc.question, model: withModels ? t.disc.model : '' } }, essays: essays || {} };
 }
@@ -848,6 +1010,7 @@ function findRecord_(id) {
   if (Array.isArray(d.secs)) rec.secs = d.secs;
   if (d.wr) rec.wr = d.wr;
   if (d.voc) rec.voc = d.voc;
+  if (d.sp) rec.sp = d.sp;
   if (d.essays) rec.essays = d.essays;
   Object.assign(rec, { id, name: String(row[1]).trim(), finishedAt: time_(row[0]), used: Array.isArray(d.used) ? d.used : [], limit: Number(d.limit) || 0 });
   return { row, d, rec };
@@ -871,9 +1034,16 @@ function reviewContent_(rec, rows, open) {
     return sets.length ? { sets, x: !open || open.showAnswers ? rcXFor_(tests, rows) : null } : null;
   }
   if (rec.voc) return { voc: rec.voc };  // 뜻·정답은 기록 줄(rows)에 있다
+  if (rec.sp) {
+    const t = loadSp_(rec.sp.id);
+    if (t) return spContent_(t, !open || open.showAnswers);
+    // 회차를 지웠어도 녹음은 들을 수 있게, 기록 줄로 문항 자리만 만든다 (문장·예시 답안은 없다)
+    const only = kind => rows.filter(x => x.kind === kind).map(x => ({ n: x.n, script: '', model: '' }));
+    return { sp: { id: rec.sp.id, title: rec.sp.title, lnr: { situation: '', items: only('sl') }, iv: { situation: '', items: only('si') } } };
+  }
   if (rec.wr) {
     const t = loadWr_(rec.wr.id);
-    return t ? wrContent_(t, !open || open.showAnswers, rec.essays || {}) : null;
+    return t ? wrContent_(t, !open || wrKeyOpen_(open, t.id), rec.essays || {}) : null;
   }
   if (rec.lc) {
     const t = loadLc_(rec.lc.id);
@@ -1001,9 +1171,10 @@ function blankOk_(b, raw) {
 // 기록을 남기고, 정답을 숨기는 설정이면 학생에게 돌려줄 답안에서 정답을 뺀다.
 // 닫힌 회차(open이 false)면 점수·맞고 틀린 것도 돌려주지 않는다. 맞고 틀린 것만 보여도 A~D를 바꿔 내 보며 정답을 알아낼 수 있어서다.
 // attempt(학생 기기에서 만든 응시 ID)가 같은 제출이 다시 오면(다시 보내기) 새로 기록하지 않고 처음 결과를 돌려준다.
-function saveResult_(rec, attempt, open) {
+// show를 주면 정답 공개 설정 대신 그것으로 정답을 보여 줄지 정한다 (라이팅: 그 회차 해설지가 열렸는지)
+function saveResult_(rec, attempt, open, show) {
   const att = String(attempt || '').replace(/[^\w-]/g, '').slice(0, 40), cache = CacheService.getScriptCache();
-  const closed = open === false, showAnswers = !closed && setting_('정답공개') !== 'N';
+  const closed = open === false, showAnswers = !closed && (show != null ? !!show : setting_('정답공개') !== 'N');
   // 유형(type)은 정답이 아니라서 남긴다
   const shown = closed ? Object.assign({}, rec, { hidden: true, score: null, parts: {}, rows: [] })
     : showAnswers ? rec : Object.assign({}, rec, { rows: rec.rows.map(x => ({ k: x.k, t: x.t, mi: x.mi, n: x.n, kind: x.kind, type: x.type, h: x.h, ko: x.ko, given: x.given, ok: x.ok })) });
@@ -1026,17 +1197,19 @@ function appendResult_(rec) {
     const lim = rec.limit > 0 ? ' (제한 ' + rec.limit + '분)' : ' (제한 없음)';
     // 빈칸 모음: "빈칸 5분 2초 (제한 없음)" / 모듈 하나: "M1 12분 3초 (제한 18분)" / 전체: "12분 3초 + 8분 0초"
     const used = rec.wr ? rec.used.map(fmt).join(' + ')
-      : rec.voc ? fmt(rec.used[0])
+      : rec.voc || rec.sp ? fmt(rec.used[0])
       : rec.practice ? PRAC_NAME[pracSec_(rec.practice.sec)] + ' ' + fmt(rec.used[0]) + lim
       : rec.lc ? (rec.module != null ? 'M' + (rec.module + 1) + ' ' : '') + fmt(rec.used[0])
       : rec.module != null ? 'M' + (rec.module + 1) + ' ' + fmt(rec.used[0]) + lim
       : rec.used.map(fmt).join(' + ');
-    const label = rec.voc ? '구문단어 ' + rec.voc.id + ' · ' + rec.voc.title
+    const label = rec.sp ? '스피킹 ' + rec.sp.title
+      : rec.voc ? '구문단어 ' + rec.voc.id + ' · ' + rec.voc.title
       : rec.wr ? '라이팅 ' + rec.wr.title
       : rec.practice ? PRAC_NAME[pracSec_(rec.practice.sec)] + ' TEST ' + rec.practice.from + (rec.practice.to !== rec.practice.from ? '-' + rec.practice.to : '')
       : rec.lc ? '리스닝 ' + rec.lc.title + (rec.module != null ? ' M' + (rec.module + 1) : '') + (rec.secs ? ' (' + rec.secs.map(s => LC_TYPE_NAME[s]).join(' · ') + ')' : '')
       : 'TEST ' + rec.testId + (rec.module != null ? ' M' + (rec.module + 1) : '') + (rec.secs ? ' (' + rec.secs.map(s => RC_SEC_NAME[s]).join(' · ') + ')' : '');
-    const where = x => (x.kind === 'v' || x.kind === 'p' ? (x.kind === 'v' ? '단어 ' : '구문 ') + x.n : (x.t != null ? 'T' + x.t + ' ' : '') + 'M' + (x.mi + 1) + '-' + x.n);
+    const where = x => (x.kind === 'sl' || x.kind === 'si' ? (x.kind === 'sl' ? '따라 말하기 ' : '인터뷰 ') + x.n
+      : x.kind === 'v' || x.kind === 'p' ? (x.kind === 'v' ? '단어 ' : '구문 ') + x.n : (x.t != null ? 'T' + x.t + ' ' : '') + 'M' + (x.mi + 1) + '-' + x.n);
     const wrong = rec.rows.filter(x => !x.ok);
     const sheet = sheet_(SH.results);
     // 기간·반 열은 나중에 생겼다. 예전에 만든 시트면 머리글을 채운다.
@@ -1045,8 +1218,8 @@ function appendResult_(rec) {
       new Date(rec.finishedAt), rec.name, label, rec.score, rec.total,
       part('0w'), part('0r'), part('1w'), part('1r'), used,
       clip_(wrong.map(where).join(', '), 5000),
-      clip_(wrong.map(x => where(x) + ': ' + (x.given || '(빈칸)') + ' → ' + (x.kind === 'w' ? x.full : x.correct)).join('; '), 5000),
-      JSON.stringify({ used: rec.used, rows: rec.rows, module: rec.module, limit: rec.limit, practice: rec.practice || null, lc: rec.lc || null, secs: rec.secs || undefined, parts: rec.lc || rec.wr || rec.voc ? rec.parts : undefined, wr: rec.wr || undefined, voc: rec.voc || undefined, essays: rec.essays || undefined }), rec.id,
+      clip_(wrong.map(x => where(x) + (x.kind === 'sl' || x.kind === 'si' ? ': (녹음 없음)' : ': ' + (x.given || '(빈칸)') + ' → ' + (x.kind === 'w' ? x.full : x.correct))).join('; '), 5000),
+      JSON.stringify({ used: rec.used, rows: rec.rows, module: rec.module, limit: rec.limit, practice: rec.practice || null, lc: rec.lc || null, secs: rec.secs || undefined, parts: rec.lc || rec.wr || rec.voc || rec.sp ? rec.parts : undefined, wr: rec.wr || undefined, voc: rec.voc || undefined, sp: rec.sp || undefined, essays: rec.essays || undefined }), rec.id,
       rec.period || '', rec.cls || ''
     ]);
   }
@@ -1055,7 +1228,7 @@ function appendResult_(rec) {
 // practice: 모아 풀기 기록의 { from, to, sec } (아니면 null)
 function partsOf_(rows, practice) {
   const key = { response: 'resp', conversation: 'conv', announcement: 'ann', talk: 'talk' }, parts = {};
-  rows.forEach(x => { const k = x.kind === 'l' ? key[x.type] : x.kind === 'v' ? 'vw' : x.kind === 'p' ? 'vp' : practice ? (x.kind === 'w' ? 'w' : practice.sec === 'academic' ? 'a' : 'd') : x.mi + x.kind; if (!k) return;
+  rows.forEach(x => { const k = x.kind === 'l' ? key[x.type] : x.kind === 'v' ? 'vw' : x.kind === 'p' ? 'vp' : x.kind === 'sl' || x.kind === 'si' ? x.kind : practice ? (x.kind === 'w' ? 'w' : practice.sec === 'academic' ? 'a' : 'd') : x.mi + x.kind; if (!k) return;
     const p = parts[k] || (parts[k] = [0, 0]); p[1]++; if (x.ok) p[0]++; });
   return parts;
 }
@@ -1074,10 +1247,11 @@ function time_(v) { return v instanceof Date ? v.getTime() : Number(v) || 0; }
 // 결과 시트의 회차 칸("TEST 5 M1", "TEST 5 M1 (Daily Life · Academic Passage)", "빈칸 TEST 1-10", "Academic TEST 1-10", "리스닝 NEW TOEFL 3 TEST 1 M2 (Best Response · Conversation)")에서 기록 종류를 읽는다
 // 리스닝 Module 1 + 2 이어 풀기는 M이 없다 ("리스닝 NEW TOEFL 3 TEST 1 (Conversation)")
 function labelInfo_(label) {
-  const s = String(label == null ? '' : label).trim(), out = { testId: null, module: null, practice: null, lc: null, secs: null, wr: null, voc: null };
+  const s = String(label == null ? '' : label).trim(), out = { testId: null, module: null, practice: null, lc: null, secs: null, wr: null, voc: null, sp: null };
   let m;
   if ((m = s.match(/^라이팅 (NEW TOEFL 3 TEST (\d+))$/))) return Object.assign(out, { wr: { id: +m[2], title: m[1] } });
   if ((m = s.match(/^구문단어 (\d+) · (.+)$/))) return Object.assign(out, { voc: { id: +m[1], title: m[2] } });
+  if ((m = s.match(/^스피킹 (NEW TOEFL 3 TEST (\d+))$/))) return Object.assign(out, { sp: { id: +m[2], title: m[1] } });
   if ((m = s.match(/^(빈칸|Daily Life|Academic) TEST (\d+)(?:-(\d+))?$/))) {
     const sec = Object.keys(PRAC_NAME).find(k => PRAC_NAME[k] === m[1]);
     return Object.assign(out, { practice: Object.assign({ from: +m[2], to: +(m[3] || m[2]) }, sec === 'words' ? {} : { sec }) });
@@ -1102,6 +1276,7 @@ function recOpen_(info, open) {
   if (info.practice) return true;
   if (info.wr) return wrOpen_(open, info.wr.id);
   if (info.voc) return vocOpen_(open, info.voc.id);
+  if (info.sp) return spOpen_(open, info.sp.id);
   if (info.testId != null) return !open.rc || open.rc.has(Number(info.testId));
   if (info.lc && /^(new|tpo)-\d+$/.test(info.lc.id || '')) {
     const p = info.lc.id.split('-'), s = p[0] === 'new' ? open.lcNew : open.lcTpo;
@@ -1143,6 +1318,8 @@ function sheet_(name) {
     sheet.appendRow(['ID', '세트', '회차', '문제 수', 'JSON']);
   } else if (name === SH.wr) {
     sheet.appendRow(['회차', '제목', '재배열 수', 'JSON']);
+  } else if (name === SH.sp) {
+    sheet.appendRow(['회차', '제목', '문항 수', 'JSON']);
   } else if (name === SH.voc) {
     sheet.appendRow(['세트', '제목', '단어 수', '구문 수', 'JSON']);
   } else if (name === SH.lcx) {
