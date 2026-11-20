@@ -209,6 +209,8 @@ function spReviewBody(V, urls) {
 // 녹음 묶음({ clips: { 'l-1': { mime, data } } })을 재생 주소로
 function spRecUrls(pack) {
   const out = {};
-  Object.entries((pack && pack.clips) || {}).forEach(([k, v]) => { const s = atob(v.data), a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); out[k] = URL.createObjectURL(new Blob([a], { type: v.mime })); });
+  Object.entries((pack && pack.clips) || {}).forEach(([k, v]) => {
+    if (!v || typeof v.data !== 'string' || v.data.length < 1336) return;  // 서버 spRecs_와 같은 기준: 고치기 전 기록에는 5바이트 빈 파일이 있다
+    const s = atob(v.data), a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); out[k] = URL.createObjectURL(new Blob([a], { type: v.mime })); });
   return out;
 }

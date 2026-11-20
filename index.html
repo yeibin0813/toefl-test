@@ -188,7 +188,7 @@ async function finish() {
   const words = e.kind === 'words', lc = e.kind === 'lc', wr = e.kind === 'wr', voc = e.kind === 'voc', sp = e.kind === 'sp';
   const recs = sp ? await spRecsB64() : null;
   const who = { name: S.name.trim(), period: S.period, cls: S.cls };
-  const body = Object.assign(sp ? { code: S.code.trim(), id: e.test.id, recs, used: e.used, startedAt: e.startedAt } : voc ? { code: S.code.trim(), id: e.set.id, answers: e.answers, used: e.used, startedAt: e.startedAt, ko: e.set.words.concat(e.set.phrases).map(x => x.ko) }
+  const body = Object.assign(sp ? { code: S.code.trim(), id: e.test.id, recs, used: e.used, startedAt: e.startedAt, diag: Object.assign({ opts: spRecOpts().map(spOptName), opt: SP.opt }, SP.diag) } : voc ? { code: S.code.trim(), id: e.set.id, answers: e.answers, used: e.used, startedAt: e.startedAt, ko: e.set.words.concat(e.set.phrases).map(x => x.ko) }
     : wr ? { code: S.code.trim(), id: e.test.id, answers: wrAnswers(e), used: e.used, startedAt: e.startedAt } : words
     ? { code: S.code.trim(), from: e.from, to: e.to, sec: e.sec || 'words', limit: e.limit, answers: e.answers, used: e.used, startedAt: e.startedAt }
     : { code: S.code.trim(), id: e.test.id, module: e.both ? 'both' : e.mod, limit: e.limit, answers: e.answers, used: e.used, startedAt: e.startedAt }, who, { attempt: e.attempt }, e.secs ? { secs: e.secs } : {});
