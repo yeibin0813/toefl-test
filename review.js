@@ -163,11 +163,52 @@ function wrReviewBody(V) {
     return `<div class="sheet rvq${x.ok ? '' : ' wrong'}"><div class="rvqh"><span class="mark ${x.ok ? 'ok' : 'bad'}">${x.ok ? 'O' : 'X'}<span class="sr">${x.ok ? ' 맞음' : ' 틀림'}</span></span>
       <span><span class="num">${b.n}.</span> ${esc(b.ctx)}</span></div>
       <div class="wrsent"><span class="tag">${RV_MINE}</span>${x.given ? esc(x.given) : '<span class="note">문장을 만들지 않았어요.</span>'}</div>
-      ${x.correct && !x.ok ? `<div class="wrsent ok"><span class="tag ok">정답</span>${esc(x.correct)}</div>` : ''}</div>`;
+      ${x.correct && !x.ok ? `<div class="wrsent ok"><span class="tag ok">정답</span>${esc(x.correct)}</div>` : ''}
+      ${wrBuildX(w.x, b.n)}</div>`;
   }).join('');
-  const essay = (title, prompt, text, model) => `<section class="stack"><h3 class="rvmod">${title}</h3><div class="sheet stack">${prompt}</div>
+  const essay = (title, prompt, text, model, xo) => `<section class="stack"><h3 class="rvmod">${title}</h3><div class="sheet stack">${prompt}</div>
     <div class="wrbox"><div class="eyebrow">${mine} · ${(String(text || '').trim().match(/\S+/g) || []).length}단어</div><p>${text ? esc(text) : '<span class="note">쓰지 않았어요.</span>'}</p></div>
-    ${model ? `<div class="wrbox model"><div class="eyebrow">모범 답안</div><p>${esc(model)}</p></div>` : ''}</section>`;
+    ${model ? `<div class="wrbox model"><div class="eyebrow">모범 답안</div><p>${esc(model)}</p></div>${wrModelX(xo)}` : ''}</section>`;
+  const x = w.x || {};
   return `<section class="stack"><h3 class="rvmod">재배열</h3>${build || '<div class="tablebox"><div class="empty">틀린 문항이 없어요.</div></div>'}</section>`
-    + essay('이메일', wrEmail(w.email), es.email, w.email.model) + essay('토론', wrDisc(w.disc), es.disc, w.disc.model);
+    + essay('이메일', wrEmail(w.email), es.email, w.email.model, x.email) + essay('토론', wrDisc(w.disc), es.disc, w.disc.model, x.disc);
+}
+// 라이팅 해설 (해설지가 열렸을 때만 서버가 보낸다): 재배열 한 문항의 해설, 모범 답안의 해석·구성·핵심 표현
+const wrBuildX = (x, n) => { const t = x && x.build && x.build[n]; return t ? `<div class="rvx"><b>해설</b><p>${esc(t)}</p></div>` : ''; };
+function wrModelX(xo) {
+  if (!xo || !xo.ko) return '';
+  return `<details class="rvscript wrx"><summary>해석 · 구성 · 핵심 표현</summary>
+    <p class="rvplain">${esc(xo.ko)}</p>
+    ${(xo.plan || []).length ? `<div class="eyebrow">구성</div><ol class="wrplan">${xo.plan.map(p => `<li>${esc(p)}</li>`).join('')}</ol>` : ''}
+    ${(xo.expr || []).length ? `<div class="eyebrow">핵심 표현</div><ul class="wrexpr">${xo.expr.map(e => `<li><b>${esc(e.en)}</b> <span>${esc(e.ko)}</span></li>`).join('')}</ul>` : ''}</details>`;
+}
+// 라이팅 해설지 한 회차: 재배열(앞 문장·정답 문장·해설), 이메일·토론(문제·모범 답안·해석·구성·핵심 표현)
+function wrKeyBody(k) {
+  const build = k.build.map(b => `<div class="sheet rvq"><div class="rvqh"><span class="num">${b.n}.</span><span>${esc(b.ctx)}</span></div>
+    <div class="wrsent ok"><span class="tag ok">정답</span>${esc(b.answer)}</div>${b.x ? `<div class="rvx"><b>해설</b><p>${esc(b.x)}</p></div>` : ''}</div>`).join('');
+  const essay = (title, prompt, m) => `<section class="stack"><h3 class="rvmod">${title}</h3><div class="sheet stack">${prompt}</div>
+    <div class="wrbox model"><div class="eyebrow">모범 답안</div><p>${esc(m.model)}</p></div>${wrModelX(m.x)}</section>`;
+  return `<section class="stack"><h3 class="rvmod">재배열</h3>${build}</section>` + essay('이메일', wrEmail(k.email), k.email) + essay('토론', wrDisc(k.disc), k.disc);
+}
+// 스피킹 다시 보기: 따라 말하기는 문장(답지)과 내 녹음, 인터뷰는 질문·예시 답안과 내 녹음.
+// urls: { 'l-1': 녹음 주소, ... } (아직 받지 않았으면 null — 그때는 녹음 자리를 비워 둔다)
+function spReviewBody(V, urls) {
+  const c = V.content && V.content.sp; if (!c || !c.lnr) return '';
+  // 학생 화면은 실제 시험처럼 영어로, 관리자 화면은 한국어로
+  const en = RV_MINE === '내 답', by = rowMap(V.r.rows), mine = en ? 'My recording' : '학생 녹음', model = en ? 'Sample answer' : '예시 답안';
+  const rec = k => (!urls ? '' : urls[k] ? `<div class="sprec"><span class="tag">${mine}</span><audio controls preload="metadata" src="${urls[k]}"></audio></div>`
+    : `<div class="sprec"><span class="tag">${mine}</span><span class="note">${en ? 'No recording.' : '녹음이 없어요.'}</span></div>`);
+  const lnr = c.lnr.items.map(x => { const k = 'l-' + x.n; V.seen && V.seen.add(k); const r = by[k];
+    return `<div class="sheet rvq"><div class="rvqh"><span class="num">${x.n}.</span><span>${x.script ? esc(x.script) : `<span class="note">${en ? 'The sentence will appear when your teacher shows the answers.' : '정답 공개가 꺼져 있어 문장은 보이지 않아요.'}</span>`}</span></div>${r ? rec(k) : ''}</div>`; }).join('');
+  const iv = c.iv.items.map(x => { const k = 'i-' + x.n; V.seen && V.seen.add(k); const r = by[k];
+    return `<div class="sheet rvq"><div class="rvqh"><span class="num">${x.n}.</span><span>${esc(x.script)}</span></div>${r ? rec(k) : ''}
+      ${x.model ? `<div class="wrbox model"><div class="eyebrow">${model}</div><p>${esc(x.model)}</p></div>` : ''}</div>`; }).join('');
+  return `<section class="stack"><h3 class="rvmod">Listen and Repeat</h3><p class="note" style="margin:0">${esc(c.lnr.situation)}</p>${lnr}</section>
+    <section class="stack"><h3 class="rvmod">Take an Interview</h3><p class="note" style="margin:0">${esc(c.iv.situation)}</p>${iv}</section>`;
+}
+// 녹음 묶음({ clips: { 'l-1': { mime, data } } })을 재생 주소로
+function spRecUrls(pack) {
+  const out = {};
+  Object.entries((pack && pack.clips) || {}).forEach(([k, v]) => { const s = atob(v.data), a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); out[k] = URL.createObjectURL(new Blob([a], { type: v.mime })); });
+  return out;
 }

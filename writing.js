@@ -5,13 +5,29 @@ const WR_PARTS = [['재배열', 410], ['이메일', 420], ['토론', 600]];  // 
 const wrWords = s => (String(s || '').trim().match(/\S+/g) || []).length;
 
 function viewWrList() {
-  const tests = S.wrTests || [];
-  if (!tests.length) return `<div class="banner">지금 열려 있는 라이팅 회차가 없어요. 선생님께 문의하세요.</div>`;
+  const tests = S.wrTests || [], keys = S.wrKeys || [];
+  // 해설지: 선생님이 「라이팅 해설지 공개 회차」에 적은 회차 (풀지 않았어도 볼 수 있다)
+  const keyList = keys.length ? `<section class="sheet stack"><div><h2 style="font-size:18px">해설지</h2><p class="note" style="margin:4px 0 0">재배열 정답과 해설, 이메일·토론 모범 답안의 해석·구성·핵심 표현이에요.</p></div>
+    <div class="toolbar">${keys.map(k => `<button class="btn small" data-act="wrKey" data-id="${k.id}">${esc(k.title)} 해설지</button>`).join('')}</div></section>` : '';
+  if (!tests.length) return `<div class="banner">지금 열려 있는 라이팅 회차가 없어요. 선생님께 문의하세요.</div>${keyList}`;
   const all = mineList(), best = id => bestText(all && all.filter(a => a.wr && a.wr.id === id), () => '재배열 ');
-  return `<section class="tests">${tests.map(t => `<article class="tcard"><h3>${esc(t.title)}</h3>
+  return keyList + `<section class="tests">${tests.map(t => `<article class="tcard"><h3>${esc(t.title)}</h3>
     <dl>${WR_PARTS.map(([l, sec], i) => `<dt>${l}</dt><dd>${i === 0 ? `${t.build}문항 · ` : ''}${fmtMin(sec / 60)}</dd>`).join('')}</dl>
     <div class="best">${best(t.id)}</div>
     <button class="btn primary" data-act="wrStart" data-id="${t.id}"${S.busy ? ' disabled' : ''}>${S.busy === 'wr' + t.id ? '불러오는 중…' : '시작'}</button></article>`).join('')}</section>`;
+}
+// 해설지 화면: S.wrKey = { id, status: 'loading' | 'ok' | 'err', key, err }
+async function openWrKey(id) {
+  const cur = S.wrKey = { id, status: 'loading' }; S.screen = 'wrkey'; render(); window.scrollTo(0, 0);
+  try { const j = await api('getWrKey', Object.assign(me(), { id })); if (S.wrKey === cur) Object.assign(cur, { status: 'ok', key: j.key }); }
+  catch (e) { if (S.wrKey === cur) Object.assign(cur, { status: 'err', err: e.message }); }
+  if (S.screen === 'wrkey') render();
+}
+function viewWrKey() {
+  const K = S.wrKey, back = `<button class="btn" data-act="home">라이팅 목록으로</button>`;
+  if (K.status === 'loading') return `<div class="sheet stack" style="max-width:520px"><h2>해설지를 불러오는 중…</h2><div>${back}</div></div>`;
+  if (K.status === 'err') return `<div class="sheet stack" style="max-width:520px"><h2>해설지를 열 수 없어요</h2><div class="banner bad">${esc(K.err)}</div><div>${back}</div></div>`;
+  return `<div class="stack"><div class="qhead"><h2>라이팅 ${esc(K.key.title)} 해설지</h2>${back}</div>${wrKeyBody(K.key)}<div class="toolbar"><span class="spacer"></span>${back}</div></div>`;
 }
 async function startWr(id) {
   S.err = ''; S.busy = 'wr' + id; render();
@@ -131,6 +147,7 @@ document.addEventListener('click', ev => {
   const b = ev.target.closest('[data-act]'); if (!b) return;
   const act = b.dataset.act;
   if (act === 'wrStart') { startWr(+b.dataset.id); return; }
+  if (act === 'wrKey') { openWrKey(+b.dataset.id); return; }
   const e = S.exam; if (!e || e.kind !== 'wr' || S.screen !== 'exam') return;
   if ((act === 'wrPick' || act === 'wrUnpick') && wrSkip) return;  // 끌어 놓은 뒤 따라오는 click
   const item = e.test.build[e.item], blanks = item ? item.slots.filter(x => x.w == null).length : 0;
