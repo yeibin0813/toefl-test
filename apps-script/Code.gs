@@ -5,7 +5,7 @@
 // 입장 코드가 맞는 학생에게만 이 서버가 꺼내 보낸다.
 // 리스닝 해설(문항별 해설·해석과 묶음별 스크립트·해석)은 "리스닝해설" 시트에 회차마다 한 줄로 있고, 정답 공개일 때 다시 보기에서만 보낸다.
 
-const SH = { settings: '설정', tests: '문제', results: '결과', lc: '리스닝', lcx: '리스닝해설', wr: '라이팅', voc: '구문단어', sp: '스피킹' };
+const SH = { settings: '설정', tests: '문제', results: '결과', lc: '리스닝', lcx: '리스닝해설', wr: '라이팅', voc: '구문단어', sp: '스피킹', spdiag: '스피킹진단' };
 // 학생 스피킹 녹음을 두는 드라이브 폴더 (기록 하나당 파일 하나, 선생님 드라이브에만 있다)
 const SP_REC_FOLDER = '토플 스피킹 녹음';
 const LC_FOLDER = '토플 리스닝 음원';
@@ -221,6 +221,14 @@ const API = {
     const open = openNow_(r), out = saveResult_(rec, r.attempt, spOpen_(open, t.id));
     if (!out.result.hidden) out.content = spContent_(t, out.showAnswers);
     return out;
+  },
+  // 시험 중 녹음이 비었을 때 학생 기기가 바로 보내는 진단 (기기·마이크 상태·녹음 크기). 원인을 찾으려고 "스피킹진단" 시트에 한 줄씩 쌓는다
+  spDiag(r) {
+    checkCode_(r.code);
+    const sheet = sheet_(SH.spdiag);
+    if (sheet.getLastRow() > 3000) return {};  // 너무 쌓이면 더 받지 않는다
+    sheet.appendRow([new Date(), clip_(r.name, 60), clip_(r.cls, 60), clip_(r.id, 10), r.diag && typeof r.diag === 'object' ? clip_(JSON.stringify(r.diag), 20000) : '']);
+    return {};
   },
   // 내 녹음 듣기 (내 기록만)
   getRecording(r) {
@@ -1323,6 +1331,8 @@ function sheet_(name) {
     sheet.appendRow(['회차', '제목', '재배열 수', 'JSON']);
   } else if (name === SH.sp) {
     sheet.appendRow(['회차', '제목', '문항 수', 'JSON']);
+  } else if (name === SH.spdiag) {
+    sheet.appendRow(['시각', '이름', '반', '회차', '진단']);
   } else if (name === SH.voc) {
     sheet.appendRow(['세트', '제목', '단어 수', '구문 수', 'JSON']);
   } else if (name === SH.lcx) {

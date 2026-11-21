@@ -82,10 +82,12 @@ function spGetMic() {
   const d = SP.diag;
   return SP.micP = (async () => {
     try {
-      if (SP.stream) { SP.stream.getTracks().forEach(t => t.stop()); SP.stream = null; }  // 멈춘 마이크를 먼저 끄고 새로 받는다
-      const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      // 새 마이크를 먼저 받고 옛 것을 끈다 (먼저 끄면 아이폰은 마이크 장치가 완전히 멈췄다 다시 켜진다)
+      const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }).catch(x => { spLog('micerr:' + (x && x.name)); throw x; });
       // 기다리는 사이 시험을 나갔거나(뒤로·다 냄) 새 시험을 열었으면 이 마이크는 바로 끈다 (켜진 채 남지 않게)
       if (SP.diag !== d || !S.exam || S.exam.kind !== 'sp' || S.exam.done) { s.getTracks().forEach(t => t.stop()); throw new Error('closed'); }
+      if (SP.stream && SP.stream !== s) SP.stream.getTracks().forEach(t => t.stop());
+      spLog('mic');
       const t = s.getAudioTracks()[0];
       if (t) ['ended', 'mute', 'unmute'].forEach(n => t.addEventListener(n, () => spLog(n)));
       SP.stream = s; SP.mic = 'ok';
@@ -97,6 +99,7 @@ function spLog(what) {
   const e = S.exam && S.exam.kind === 'sp' ? S.exam : null;
   if (SP.diag && SP.diag.ev.length < 100) SP.diag.ev.push(what + '@' + (e ? e.step : '') + ':' + (e && e.startedAt ? Math.round((Date.now() - e.startedAt) / 1000) : ''));
 }
+const spTrk = () => { const t = SP.stream && SP.stream.getAudioTracks()[0]; return t ? t.readyState[0] + (t.muted ? 'm' : '') + (t.enabled ? '' : 'd') : '-'; };
 const spLive = () => { const t = SP.stream && SP.stream.getAudioTracks()[0]; return !!t && t.readyState === 'live' && !t.muted; };
 // 녹음 형식 후보 (앞에서부터 마이크 확인으로 되는 것을 고른다). 아이폰 녹음이 비었던 것은 형식 탓이 아니라 마이크가 멈춘 탓이었다
 function spRecOpts() {
@@ -248,7 +251,7 @@ document.addEventListener('visibilitychange', () => {
 function spBegin() {
   const e = S.exam; if (!e || !SP.clips || !(SP.check && SP.check.url)) return;
   if (!spCtx()) spAudio();  // 소리를 이 클릭 안에서 깨운다 (Web Audio가 없는 브라우저는 재생기로 첫 안내를 바로 튼다)
-  spGetMic().catch(() => {});  // 시작 탭 안에서 마이크를 새로 켠다 (확인 녹음을 <audio>로 들었으면 마이크가 멈췄을 수 있다)
+  if (!spLive()) spGetMic().catch(() => {});  // 마이크 확인에서 녹음이 된 그 마이크를 그대로 쓴다 (끊겼을 때만 이 탭 안에서 다시 켠다)
   // 인터뷰 영상을 미리 소리 끄고 틀었다 켜는 방법은 쓰지 않는다: 아이폰에서 마이크가 끊기는 원인으로 의심된다.
   // 마이크를 쓰는 중인 페이지는 사파리·크롬 모두 소리 있는 재생을 허락하고, 막히면 ▶ Play 버튼이 나온다
   spVideo();
@@ -300,24 +303,28 @@ function spMediaDone(el) {
 async function spRecord(st) {
   const e = S.exam, chunks = [], step = e.step, live = () => S.exam === e && e.step === step;
   if (!spLive()) { try { await spGetMic(); } catch (x) {} if (!live()) return; }  // 마이크가 끊겨 있으면 다시 켜고 녹음
-  const opts = spRecOpts()[SP.opt] || {};
+  const opts = spRecOpts()[SP.opt] || {}, info = { t0: spTrk(), ac: SP.ac ? SP.ac.state : '-', at: Date.now() };
   let rec;
   try {
     rec = SP.rec = new MediaRecorder(SP.stream, opts);
     rec.ondataavailable = ev => { if (ev.data && ev.data.size) chunks.push(ev.data); };
-    rec.onstop = () => { if (live()) spRecorded(st, new Blob(chunks, { type: (rec.mimeType || opts.mimeType || 'audio/webm').replace(/\s+/g, '') })); };
+    rec.onerror = ev => spLog('recerr:' + (ev && ev.error && ev.error.name));
+    rec.onstop = () => { info.n = chunks.length; info.ms = Date.now() - info.at; if (live()) spRecorded(st, new Blob(chunks, { type: (rec.mimeType || opts.mimeType || 'audio/webm').replace(/\s+/g, '') }), info); };
     rec.start();
-  } catch (x) { SP.rec = null; spRecorded(st, null); return; }
+  } catch (x) { SP.rec = null; spLog('recerr:' + (x && x.name)); spRecorded(st, null, info); return; }
   e.phase = 'rec'; e.recEnds = Date.now() + st.secs * 1000; SP.blocked = false; render();
 }
 // 녹음 하나가 끝났을 때: 소리가 담겼으면(풀어서 1초 이상) 다음으로. 비었으면 마이크를 새로 켜서 같은 문제를 한 번 더
-async function spRecorded(st, blob) {
+async function spRecorded(st, blob, info) {
   const e = S.exam, step = e.step, q = await spQuality(blob);
   if (S.exam !== e || e.step !== step) return;
-  SP.diag.recs.push({ k: st.k, size: blob ? blob.size : -1, mime: blob ? blob.type : '', dur: q.dur, again: SP.again[st.k] || 0 });
+  info = info || {};
+  SP.diag.recs.push({ k: st.k, size: blob ? blob.size : -1, mime: blob ? blob.type : '', dur: q.dur, peak: q.peak, again: SP.again[st.k] || 0,
+    n: info.n, ms: info.ms, t0: info.t0, t1: spTrk(), ac0: info.ac, ac1: SP.ac ? SP.ac.state : '-' });
   // 녹음기는 받은 소리만 쓴다 (조용해도 길이는 찬다). 그래서 정한 시간보다 훨씬 짧으면 대답 도중 마이크가 멈춘 것: 다시 묻되, 건너뛸 때를 위해 앞부분은 남긴다
   if (q.ok && q.dur != null && q.dur < st.secs * 0.6) { q.ok = false; SP.recs[st.k] = blob; spLog('short'); }
   if (q.ok) { SP.recs[st.k] = blob; delete SP.again[st.k]; e.step++; spEnter(); return; }
+  api('spDiag', Object.assign(me(), { id: e.test.id, diag: Object.assign({ opts: spRecOpts().map(spOptName), opt: SP.opt }, SP.diag) })).catch(() => {});
   if (!SP.again[st.k]) {
     SP.again[st.k] = 1; SP.note = 'Your answer was not recorded. The question will play again. Please answer once more.';
     e.phase = 'play'; render();
