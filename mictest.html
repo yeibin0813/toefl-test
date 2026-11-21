@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>마이크 진단</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  main { max-width: 560px; margin: 0 auto; padding: 20px 16px 40px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+  td, th { border-bottom: 1px solid var(--line); padding: 6px 4px; text-align: left; vertical-align: top; }
+  .ok { color: var(--good, #1a7f4b); font-weight: 700; } .bad { color: var(--bad, #b42318); font-weight: 700; }
+  #now { margin-top: 12px; font-weight: 600; }
+  pre { white-space: pre-wrap; word-break: break-all; font-size: 11px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h2>아이폰 마이크 진단</h2>
+  <p class="note">스피킹 시험에서 녹음이 비는 원인을 찾는 페이지예요. 문제 음원은 쓰지 않고 '삐' 소리만 틀어요.<br>
+    사파리 탭에서 열고, 이어폰 없이 조용한 곳에서 <b>시작</b>을 누르세요. 끝날 때까지(약 2분) <b>화면을 켜 둔 채 숫자를 계속 소리 내어 세어 주세요.</b></p>
+  <div class="note" id="env"></div>
+  <button class="btn primary" id="go">시작</button>
+  <div id="now"></div>
+  <table id="tbl" hidden><thead><tr><th>방법</th><th>결과</th><th>크기 · 길이 · 소리</th></tr></thead><tbody></tbody></table>
+  <pre id="raw"></pre>
+</main>
+<script src="config.js"></script>
+<script src="api.js"></script>
+<script>
+/* 시험과 같은 순서(소리 틀기 → 삐 → 녹음)를 마이크·재생 방법만 바꿔 가며 차례로 해 보고, 어느 방법에서 녹음이 비는지 본다.
+   S1 확인과 같음 · S2 지금 시험(같은 마이크, 긴 소리) · S3 소리 도중 새 마이크 먼저 · S4 소리 도중 끄고 다시 켬(지난번 시험)
+   S5 조용할 때 끄고 다시 켬 · S6 S4를 소리 모드 고정으로 · S7 <audio>가 끝난 뒤(예전 시험) · S8 그 뒤 새 마이크 먼저.
+   결과는 화면에 보이고, 이 기기로 학생 페이지에 들어간 적이 있으면 서버 「스피킹진단」 시트에도 한 줄 남긴다 (회차 칸 = mictest). */
+const LS = 'toefl-rq2', lsGet = k => { try { return JSON.parse(localStorage.getItem(LS + k)); } catch (e) { return null; } };
+const $ = id => document.getElementById(id), ev = [], out = [];
+let ac, stream, el, T0 = 0, granted = false;
+const log = s => { if (ev.length < 200) ev.push(s + '@' + ((performance.now() - T0) / 1000).toFixed(1)); };
+const trk = () => { const t = stream && stream.getAudioTracks()[0]; return t ? t.readyState[0] + (t.muted ? 'm' : '') + (t.enabled ? '' : 'd') : '-'; };
+const say = s => { $('now').textContent = s; };
+// 끝나지 않는 약속은 ms 뒤 실패로 (한 단계가 멈춰도 결과를 잃지 않게)
+const within = (p, ms, tag) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error(tag)), ms))]);
+const ver = (navigator.userAgent.match(/Version\/([\d.]+)/) || [])[1] || '?', hasAS = 'audioSession' in navigator;
+$('env').textContent = `Safari ${ver} · audioSession ${hasAS ? '있음' : '없음'}`;
+
+// 말소리 크기쯤 되는 오르내리는 소리 (Web Audio)
+function playWA(sec, f) {
+  const sr = ac.sampleRate, b = ac.createBuffer(1, Math.round(sr * sec), sr), d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) { const t = i / sr; d[i] = 0.15 * Math.sin(2 * Math.PI * (f || 330) * t) * (0.6 + 0.4 * Math.sin(2 * Math.PI * 3 * t)); }
+  return new Promise(res => {
+    const s = ac.createBufferSource(); s.buffer = b; s.connect(ac.destination);
+    s.onended = () => { s.onended = null; log('wa:ended'); res(); }; s.start();
+    setTimeout(() => { if (s.onended) { s.onended = null; log('wa:timeout'); try { s.stop(); } catch (x) {} } res(); }, (sec + 2) * 1000);  // 안 울렸으면 나중에 갑자기 나오지 않게 버린다
+  });
+}
+const beep = () => playWA(0.8, 1000);
+function wavUrl(sec, amp) {
+  const sr = 24000, n = Math.round(sr * sec), buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf), w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.round(amp * Math.sin(2 * Math.PI * 440 * i / sr)), true);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+// <audio>로 sec초 소리를 끝까지 (예전 시험 방식)
+function playEl(sec) {
+  return new Promise(res => { const t = setTimeout(() => { log('el:timeout'); res(); }, (sec + 3) * 1000);
+    el.onended = () => { clearTimeout(t); log('el:ended'); res(); }; el.muted = false; el.src = wavUrl(sec, 5000); el.play().catch(x => { clearTimeout(t); log('el:' + (x && x.name)); res(); }); });
+}
+async function gum() {
+  const g = navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  const s = await (granted ? within(g, 15000, 'gum-timeout') : g).catch(x => { log('gumerr:' + (x && (x.name === 'Error' ? x.message : x.name))); g.then(s2 => s2.getTracks().forEach(t => t.stop()), () => {}); throw x; });
+  const t = s.getAudioTracks()[0]; if (t) ['ended', 'mute', 'unmute'].forEach(n => t.addEventListener(n, () => log(n + ':' + t.id.slice(0, 4))));
+  log('gum:' + (t && t.id.slice(0, 4))); granted = true;  // 처음 한 번은 허용을 묻는 창이 떠 있을 수 있어 시간 제한을 두지 않는다
+  return s;
+}
+const stopAll = s => { if (s) { s.getTracks().forEach(t => t.stop()); log('stop'); } };
+const OPTS = [{ mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 32000 }, { mimeType: 'audio/mp4', audioBitsPerSecond: 32000 }, {}]
+  .filter(o => { try { return !o.mimeType || MediaRecorder.isTypeSupported(o.mimeType); } catch (x) { return false; } });
+// sec초 녹음. 0.5초마다 조각을 받아 크기를 남긴다 (처음부터 안 들어왔는지, 들어오다 멈췄는지)
+function record(sec, slice) {
+  return new Promise(res => {
+    const chunks = []; let rec;
+    try {
+      rec = new MediaRecorder(stream, OPTS[0]);
+      rec.ondataavailable = e => { if (e.data) chunks.push(e.data); };
+      rec.onerror = e => log('recerr:' + (e && e.error && e.error.name));
+      rec.onstop = () => res({ blob: new Blob(chunks.filter(c => c.size), { type: (rec.mimeType || 'audio/webm').replace(/\s+/g, '') }), sizes: chunks.map(c => c.size), t1: trk() });
+      if (slice) rec.start(slice); else rec.start();
+    } catch (x) { log('recerr:' + (x && x.name)); res({ blob: null, sizes: [], t1: trk() }); return; }
+    setTimeout(() => { try { rec.stop(); } catch (x) { res({ blob: null, sizes: chunks.map(c => c.size), t1: trk() }); } }, sec * 1000);
+  });
+}
+async function quality(blob) {
+  if (!blob || blob.size < 1000) return { dur: null, peak: null };
+  try {
+    const AC = window.OfflineAudioContext || window.webkitOfflineAudioContext, ab = await blob.arrayBuffer(), c = new AC(1, 1, 44100);
+    const b = await new Promise((r, j) => { const p = c.decodeAudioData(ab, r, j); if (p && p.then) p.then(r, j); });
+    const d = b.getChannelData(0); let pk = 0; for (let i = 0; i < d.length; i += 4) pk = Math.max(pk, Math.abs(d[i]));
+    return { dur: +b.duration.toFixed(1), peak: +pk.toFixed(3), pk };
+  } catch (x) { return { dur: 'x:' + (x && x.name), peak: null }; }
+}
+async function rec(name, sec, slice = 500) {
+  const t0 = trk(), a0 = ac.state;
+  say(name + ' — 녹음 중… 숫자를 세어 주세요');
+  const r = await record(sec, slice), q = await within(quality(r.blob), 10000, 'decode').catch(x => ({ dur: 'x:' + x.message, peak: null })), size = r.blob ? r.blob.size : -1;
+  const decoded = typeof q.dur === 'number', ok = size >= 1000 && (!decoded || (q.dur >= sec * 0.6 && q.pk > 1e-6));
+  const row = { name, ok, size, dur: q.dur, peak: q.peak, sizes: r.sizes, t0, t1: r.t1, ac0: a0, ac1: ac.state };
+  out.push(row); log(name + ':' + (ok ? 'ok' : 'EMPTY'));
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td>${name}</td><td class="${ok ? 'ok' : 'bad'}">${ok ? '녹음됨' : '비었음'}</td><td>${size}B · ${q.dur == null ? '-' : q.dur + 's'} · ${q.peak == null ? '-' : q.peak}</td>`;
+  $('tbl').tBodies[0].appendChild(tr);
+  return ok;
+}
+const skip = (name, why) => { out.push({ name, skipped: why }); const tr = document.createElement('tr'); tr.innerHTML = `<td>${name}</td><td>건너뜀</td><td>${why}</td>`; $('tbl').tBodies[0].appendChild(tr); };
+
+const STEPS = [
+  ['S1 확인과 같음', async n => { await playWA(3); await beep(); await rec(n, 3.5, 0); }],
+  ['S2 마이크 그대로·긴 소리', async n => { await playWA(15); await playWA(3.4, 260); await beep(); await rec(n, 4); }],
+  ['S3 소리 도중 새 마이크 먼저', async n => { const pl = playWA(4); await new Promise(r => setTimeout(r, 300)); const s = await gum(); stopAll(stream); stream = s; await pl; await beep(); await rec(n, 3.5); }],
+  ['S4 소리 도중 끄고 다시 켬', async n => { stopAll(stream); stream = null; const p = gum(); const pl = playWA(6); stream = await p.finally(() => pl); await pl; await beep(); await rec(n, 4); }],
+  ['S5 조용할 때 끄고 다시 켬', async n => { stopAll(stream); stream = null; stream = await gum(); await playWA(3.4, 260); await beep(); await rec(n, 3.5); }],
+  ['S6 소리 모드 고정·끄고 다시 켬', async n => {
+    if (!hasAS) return skip(n, 'audioSession 없음');
+    try { navigator.audioSession.type = 'play-and-record'; log('as:' + navigator.audioSession.type); } catch (x) { log('as:' + (x && x.name)); }
+    try { stopAll(stream); stream = null; const p = gum(); const pl = playWA(6); stream = await p.finally(() => pl); await pl; await beep(); await rec(n, 3.5); }
+    finally { try { navigator.audioSession.type = 'auto'; log('as:auto'); } catch (x) {} } }],
+  ['S7a 조용할 때 그냥 녹음', async n => { await rec(n, 2); }],
+  ['S7b audio 소리가 끝난 뒤', async n => { await within(ac.suspend(), 3000, 'suspend').catch(x => log('ac:' + x.message)); log('ac:suspend'); await playEl(2); await rec(n, 3.5); }],
+  ['S8 그 뒤 새 마이크 먼저', async n => { const s = await gum(); stopAll(stream); stream = s; await rec(n, 3.5); await within(ac.resume(), 3000, 'resume').catch(x => log('ac:' + x.message)); }],
+];
+
+$('go').onclick = async () => {
+  $('go').disabled = true; $('tbl').hidden = false; T0 = performance.now();
+  try { if (navigator.wakeLock) navigator.wakeLock.request('screen').then(() => log('wl:ok'), () => log('wl:err')); } catch (x) {}
+  document.addEventListener('visibilitychange', () => log('vis:' + document.visibilityState));
+  // 탭 안에서: 소리 장치를 깨우고, <audio>도 짧은 무음으로 깨우고, 마이크를 켠다 (시험의 마이크 확인과 같은 순서)
+  const AC = window.AudioContext || window.webkitAudioContext; ac = new AC(); ac.onstatechange = () => log('ac:' + ac.state); ac.resume().catch(() => {});
+  try { const b = ac.createBufferSource(); b.buffer = ac.createBuffer(1, 1, ac.sampleRate); b.connect(ac.destination); b.start(); } catch (x) {}
+  el = new Audio(); el.muted = true; el.src = wavUrl(0.3, 0); el.play().catch(x => log('el0:' + (x && x.name)));
+  try { stream = await gum(); } catch (x) { say('마이크를 켤 수 없어요: ' + (x && x.name) + '. 이 사이트의 마이크를 허용한 뒤 새로고침해 주세요.'); return; }
+  const tk = stream.getAudioTracks()[0], st = tk && tk.getSettings ? tk.getSettings() : {};
+  for (const [name, fn] of STEPS) {
+    say(name + ' — 소리를 들어 주세요');
+    try { await within(fn(name), 60000, 'step-timeout'); }
+    catch (x) {
+      const m = x && (x.name === 'Error' ? x.message : x.name); log(name + ':err:' + m); out.push({ name, ok: false, err: m });
+      const tr = document.createElement('tr'); tr.innerHTML = `<td>${name}</td><td class="bad">오류</td><td>${m}</td>`; $('tbl').tBodies[0].appendChild(tr);
+      if (!stream || stream.getAudioTracks()[0].readyState !== 'live') { try { stream = await within(gum(), 15000, 'gum-timeout'); } catch (y) { log('regum:fail'); } }
+    }
+    $('raw').textContent = JSON.stringify({ results: out, ev });
+  }
+  stopAll(stream);
+  const diag = { page: 'mictest-2', ua: navigator.userAgent.slice(0, 200), safari: ver, audioSession: hasAS, opt: OPTS[0] && OPTS[0].mimeType, acRate: ac.sampleRate, micRate: st.sampleRate, results: out, ev };
+  $('raw').textContent = JSON.stringify(diag);
+  const code = lsGet(':code');
+  if (code) {
+    say('끝났어요. 결과를 보내는 중…');
+    try { await api('spDiag', { code, name: lsGet(':name') || '', cls: lsGet(':cls') || '', id: 'mictest', diag }); say('끝났어요. 결과를 보냈어요. 혹시 모르니 이 화면도 캡처해 두세요.'); }
+    catch (x) { say('끝났어요. 결과를 보내지 못했어요 (' + x.message + '). 이 화면을 캡처해서 보내 주세요.'); }
+  } else say('끝났어요. 이 화면을 캡처해서 보내 주세요.');
+};
+</script>
+</body>
+</html>
