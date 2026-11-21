@@ -5,7 +5,9 @@
    S.exam (스피킹) = { kind: 'sp', test, showAnswers, step, phase: 'play' | 'beep' | 'rec', recEnds, startedAt, used }
    SP: 받은 묶음(clips: 이름 → 재생 주소), 재생기, 마이크, 녹음(recs: 키 → Blob) */
 const SP = { key: '', clips: null, loading: false, got: 0, need: 0, err: '', au: null, vid: null, stream: null, mic: '', rec: null, recs: {}, urls: {}, blocked: false, tok: null, wake: null,
-  check: null, checkMsg: '', opt: 0, again: {}, note: '', diag: null };
+  check: null, checkMsg: '', opt: 0, again: {}, note: '', diag: null, ac: null, src: null, bufs: {}, vidWA: false };
+// Web Audio로 튼 소리가 끝났을 때 spMediaDone에 넘기는 표시 (재생기 대신)
+const SP_WA = {};
 // 녹음 파일이 이보다 작으면 소리 없는 빈 껍데기다 (아이폰 사파리 WebM이 5바이트만 남긴 적이 있다)
 const SP_MIN = 1000;
 const SP_MIME = n => (/\.mp4$/.test(n) ? 'video/mp4' : /\.jpg$/.test(n) ? 'image/jpeg' : 'audio/mpeg');
@@ -41,11 +43,12 @@ function spRelease() {
   if (SP.stream) SP.stream.getTracks().forEach(t => t.stop());
   if (SP.au) { try { SP.au.pause(); SP.au.removeAttribute('src'); SP.au.load(); } catch (e) {} }
   if (SP.vid) { try { SP.vid.pause(); SP.vid.removeAttribute('src'); SP.vid.load(); } catch (e) {} }
+  if (SP.src) { SP.src.onended = null; try { SP.src.stop(); } catch (e) {} }
   if (SP.clips) Object.values(SP.clips).forEach(u => URL.revokeObjectURL(u));
   spWakeOff();
   if (SP.check && SP.check.url) URL.revokeObjectURL(SP.check.url);
   Object.assign(SP, { key: '', clips: null, loading: false, got: 0, need: 0, err: '', stream: null, mic: '', rec: null, recs: {}, blocked: false, tok: null,
-    check: null, checkMsg: '', opt: 0, again: {}, note: '', micP: null, diag: { ua: navigator.userAgent.slice(0, 200), check: [], recs: [], ev: [] } });
+    check: null, checkMsg: '', opt: 0, again: {}, note: '', micP: null, src: null, bufs: {}, vidWA: false, diag: { ua: navigator.userAgent.slice(0, 200), check: [], recs: [], ev: [] } });
 }
 function spQuit() { spRelease(); S.exam = null; S.screen = 'home'; render(); window.scrollTo(0, 0); }
 
@@ -79,10 +82,10 @@ function spGetMic() {
   const d = SP.diag;
   return SP.micP = (async () => {
     try {
+      if (SP.stream) { SP.stream.getTracks().forEach(t => t.stop()); SP.stream = null; }  // 멈춘 마이크를 먼저 끄고 새로 받는다
       const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
       // 기다리는 사이 시험을 나갔거나(뒤로·다 냄) 새 시험을 열었으면 이 마이크는 바로 끈다 (켜진 채 남지 않게)
       if (SP.diag !== d || !S.exam || S.exam.kind !== 'sp' || S.exam.done) { s.getTracks().forEach(t => t.stop()); throw new Error('closed'); }
-      if (SP.stream) SP.stream.getTracks().forEach(t => t.stop());
       const t = s.getAudioTracks()[0];
       if (t) ['ended', 'mute', 'unmute'].forEach(n => t.addEventListener(n, () => spLog(n)));
       SP.stream = s; SP.mic = 'ok';
@@ -122,20 +125,62 @@ async function spQuality(blob) {
     const AC = window.OfflineAudioContext || window.webkitOfflineAudioContext, ab = await blob.arrayBuffer(), ctx = new AC(1, 1, 44100);
     const buf = await new Promise((res, rej) => { const p = ctx.decodeAudioData(ab, res, rej); if (p && p.then) p.then(res, rej); });
     const d = buf.getChannelData(0); let pk = 0; for (let i = 0; i < d.length; i += 4) pk = Math.max(pk, Math.abs(d[i]));
-    return { ok: buf.duration >= 1, dur: +buf.duration.toFixed(1), peak: +pk.toFixed(3) };
+    return { ok: buf.duration >= 1, dur: +buf.duration.toFixed(1), peak: +pk.toFixed(3), buf };
   } catch (x) { return { ok: true, dur: null, peak: null }; }
 }
 // 삐 소리 한 번 (묶음을 아직 못 받았으면 건너뛴다)
-function spBeep() {
-  const url = SP.clips && SP.clips['beep.mp3']; if (!url) return Promise.resolve();
+// 소리는 Web Audio로 튼다. 아이폰 사파리(18.4~26)는 <audio>로 튼 0.95초 넘는 소리가 끝나면 '알림음'으로 보고 오디오 세션을 꺼 버려서,
+// 켜 둔 마이크가 아무것도 녹음하지 못한다 (WebKit MediaSessionManagerCocoa::sessionWillEndPlayback). 짧은 삐 소리 뒤에는 녹음이 됐고 문제 음성 뒤에는 비었던 까닭.
+// 탭 안에서 부른다: 휴대폰은 탭 안에서만 소리를 켤 수 있다
+function spCtx() {
+  const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
+  if (!SP.ac) {
+    try { SP.ac = new AC(); } catch (x) { return null; }
+    const ac = SP.ac;
+    ac.onstatechange = () => {
+      if (SP.ac !== ac) return;
+      spLog('ac:' + ac.state);
+      const e = S.exam;  // 전화·화면 잠금으로 소리가 멈추면 ▶ Play, 저절로 다시 나오면 버튼을 거둔다
+      if (ac.state === 'running') { if (SP.blocked === 'ac') { SP.blocked = false; render(); } }
+      else if (!SP.blocked && e && e.kind === 'sp' && S.screen === 'exam' && (e.phase === 'play' || e.phase === 'beep')) { SP.blocked = 'ac'; render(); }
+    };
+  }
+  if (SP.ac.state !== 'running') SP.ac.resume().catch(() => {});
+  try { const b = SP.ac.createBufferSource(); b.buffer = SP.ac.createBuffer(1, 1, SP.ac.sampleRate); b.connect(SP.ac.destination); b.start(); } catch (x) {}  // 탭 안에서 한 프레임을 틀어야 확실히 열린다
+  return SP.ac;
+}
+// 인터뷰는 영상에서 뽑아 둔 소리(q8a.mp3)를 튼다. 예전 묶음이면 영상 파일을 그대로 풀어 본다
+const spSnd = n => (/\.mp4$/.test(n) && SP.clips && SP.clips[n.replace('.mp4', 'a.mp3')] ? n.replace('.mp4', 'a.mp3') : n);
+// 음원 하나를 Web Audio용으로 풀어 둔다 (한 번 푼 것은 다시 쓴다)
+function spBuf(name) {
+  if (SP.bufs[name]) return SP.bufs[name];
+  const ac = SP.ac, url = SP.clips && SP.clips[name];
+  if (!ac || !url) return Promise.reject(new Error('no audio'));
+  return SP.bufs[name] = fetch(url).then(r => r.arrayBuffer())
+    .then(ab => new Promise((res, rej) => { const p = ac.decodeAudioData(ab, res, rej); if (p && p.then) p.then(res, rej); }))
+    .catch(x => { delete SP.bufs[name]; throw x; });
+}
+// 마이크 확인용: 음원을 (sec초까지) 틀고 끝나면 돌아온다
+async function spHear(name, sec) {
+  const url = SP.clips && SP.clips[name]; if (!url) return;
+  if (SP.ac) {
+    try {
+      const buf = await spBuf(name); if (!SP.clips || SP.clips[name] !== url) return;  // 푸는 사이 나갔다
+      const s = SP.src = SP.ac.createBufferSource(), len = Math.min(buf.duration, sec || buf.duration);  // SP.src에 두면 뒤로 갈 때 멈춘다
+      s.buffer = buf; s.connect(SP.ac.destination);
+      await new Promise(res => { s.onended = res; s.start(0, 0, len); setTimeout(res, (len + 2) * 1000); });
+      if (SP.src === s) { SP.src = null; s.onended = null; try { s.stop(); } catch (x) {} }  // 끝내 안 울렸으면 나중에 갑자기 나오지 않게 버린다
+      return;
+    } catch (x) {}
+  }
   const au = spAudio();
-  return new Promise(res => { const t = setTimeout(res, 3000); au.addEventListener('ended', () => { clearTimeout(t); res(); }, { once: true }); au.src = url; au.play().catch(() => { clearTimeout(t); res(); }); });
+  await new Promise(res => { const t = setTimeout(res, 3000); au.addEventListener('ended', () => { clearTimeout(t); res(); }, { once: true }); au.src = url; au.play().catch(() => { clearTimeout(t); res(); }); });
 }
 // 마이크 확인: 시험과 같은 순서(삐 → 녹음)로 3.5초 녹음해서 소리가 담기는지 본다. 안 되면 다른 형식으로 다시
 async function spCheck() {
   if (SP.check === 'run') return;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) { SP.mic = 'This browser cannot record. Please update the browser, or use another device.'; render(); return; }
-  const au = spAudio(); au.src = lcSilent(); au.play().catch(() => {});  // 이 탭 안에서 재생기를 깨워 둔다 (휴대폰)
+  if (!spCtx()) { const au = spAudio(); au.src = lcSilent(); au.play().catch(() => {}); }  // 이 탭 안에서 소리를 깨워 둔다 (휴대폰)
   if (SP.check && SP.check.url) URL.revokeObjectURL(SP.check.url);
   const d = SP.diag, gone = () => SP.diag !== d;  // 확인 도중 뒤로 나가거나 다른 시험을 열면 여기서 멈춘다
   SP.check = 'run'; SP.checkMsg = 'Turning on the microphone…'; SP.mic = ''; render();
@@ -144,14 +189,17 @@ async function spCheck() {
   const opts = spRecOpts();
   for (let i = 0; i < opts.length; i++) {
     if (i) { try { await spGetMic(); } catch (x) {} if (gone()) return; }
-    SP.checkMsg = 'Get ready. Speak after the beep.'; render();
-    await spBeep();
+    // 시험과 똑같이: 음성을 몇 초 듣고 → 삐 → 녹음 (음성을 튼 뒤에 녹음이 되는지까지 본다)
+    SP.checkMsg = 'Listen. Then speak after the beep.'; render();
+    await spHear('intro1.mp3', 3);
+    if (gone()) return;
+    await spHear('beep.mp3');
     if (gone()) return;
     SP.checkMsg = (i ? 'Once more, please. ' : '') + 'Recording… Say a sentence, for example: "Hello, my name is …"'; render();
     const blob = await spRecFor(opts[i], 3500), q = await spQuality(blob);
     if (gone()) return;
     SP.diag.check.push({ o: spOptName(opts[i]), size: blob ? blob.size : -1, mime: blob ? blob.type : '', dur: q.dur, peak: q.peak });
-    if (q.ok) { SP.opt = i; SP.check = { url: URL.createObjectURL(blob), low: q.peak != null && q.peak < 0.02 }; render(); return; }
+    if (q.ok) { SP.opt = i; SP.check = { url: URL.createObjectURL(blob), buf: q.buf || null, low: q.peak != null && q.peak < 0.02 }; render(); return; }
   }
   SP.check = 'fail'; render();
 }
@@ -159,7 +207,8 @@ async function spCheck() {
 /* ---------- 진행 ---------- */
 function spAudio() {
   if (SP.au) return SP.au;
-  const au = SP.au = new Audio(); au.preload = 'auto';
+  // 예비 재생기 (Web Audio가 안 될 때만): <audio>가 아니라 보이지 않는 <video>로 튼다. 사파리는 <video>가 끝날 때는 오디오 세션을 끄지 않는다
+  const au = SP.au = document.createElement('video'); au.playsInline = true; au.setAttribute('playsinline', ''); au.preload = 'auto';
   au.addEventListener('ended', () => spMediaDone(au));
   au.addEventListener('error', () => { if (au.getAttribute('src')) spMediaDone(au); });
   au.addEventListener('pause', () => spPaused(au));
@@ -170,9 +219,9 @@ function spVideo() {
   const v = SP.vid = document.createElement('video');
   v.playsInline = true; v.setAttribute('playsinline', ''); v.disablePictureInPicture = true; v.setAttribute('controlslist', 'nodownload noplaybackrate'); v.className = 'spvid';
   v.addEventListener('contextmenu', ev => ev.preventDefault());
-  v.addEventListener('ended', () => spMediaDone(v));
-  v.addEventListener('error', () => { if (v.getAttribute('src')) spMediaDone(v); });
-  v.addEventListener('pause', () => spPaused(v));
+  v.addEventListener('ended', () => { if (!SP.vidWA) spMediaDone(v); });
+  v.addEventListener('error', () => { if (!SP.vidWA && v.getAttribute('src')) spMediaDone(v); });
+  v.addEventListener('pause', () => { if (!SP.vidWA) spPaused(v); });
   return v;
 }
 // 기기가 재생을 멈추면(이어폰이 빠짐, 전화, 이어폰 버튼) ▶ 버튼을 보여 준다. 끝까지 들어서 멈춘 것과 다음 음원으로 바뀌며 멈춘 것은 빼고
@@ -198,8 +247,8 @@ document.addEventListener('visibilitychange', () => {
 // 시작 버튼을 누른 순간에 재생기를 깨워 둔다 (휴대폰은 사용자가 누를 때만 소리를 처음 틀 수 있다)
 function spBegin() {
   const e = S.exam; if (!e || !SP.clips || !(SP.check && SP.check.url)) return;
-  spAudio();  // 첫 안내 음성은 이 클릭 안에서 바로 튼다 (spEnter)
-  if (!spLive()) spGetMic().catch(() => {});  // 확인한 뒤 오래 두어 마이크가 끊겼으면 첫 녹음 전에 다시 켠다
+  if (!spCtx()) spAudio();  // 소리를 이 클릭 안에서 깨운다 (Web Audio가 없는 브라우저는 재생기로 첫 안내를 바로 튼다)
+  spGetMic().catch(() => {});  // 시작 탭 안에서 마이크를 새로 켠다 (확인 녹음을 <audio>로 들었으면 마이크가 멈췄을 수 있다)
   // 인터뷰 영상을 미리 소리 끄고 틀었다 켜는 방법은 쓰지 않는다: 아이폰에서 마이크가 끊기는 원인으로 의심된다.
   // 마이크를 쓰는 중인 페이지는 사파리·크롬 모두 소리 있는 재생을 허락하고, 막히면 ▶ Play 버튼이 나온다
   spVideo();
@@ -214,20 +263,39 @@ async function spEnter() {
   if (st.t === 'q' && !spLive()) { spLog('relive'); try { await spGetMic(); } catch (x) {} if (S.exam !== e || e.step !== step) return; }
   spPlay(st.clip);
 }
-function spPlay(name) {
-  const url = SP.clips && SP.clips[name], isVid = /\.mp4$/.test(name), el = isVid ? spVideo() : spAudio();
-  if (!url) { spMediaDone(el); return; }
-  if (isVid) { if (SP.au) SP.au.pause(); spPlaceVideo(); }
-  el.src = url; el.currentTime = 0;
+async function spPlay(name) {
+  const e = S.exam, step = e && e.step, phase = e && e.phase, isVid = /\.mp4$/.test(name), url = SP.clips && SP.clips[name];
+  if (!url) { spMediaDone(SP_WA); return; }
+  let buf = null;
+  if (SP.ac) { try { buf = await spBuf(spSnd(name)); } catch (x) { spLog('nobuf:' + name); } if (S.exam !== e || e.step !== step || e.phase !== phase) return; }
+  if (isVid) {
+    if (SP.au) SP.au.pause();
+    const v = spVideo(); spPlaceVideo(); SP.vidWA = !!buf; v.muted = !!buf; v.src = url; v.currentTime = 0;
+    v.play().catch(x => { if (buf) return; if (x && x.name === 'NotAllowedError') { SP.blocked = true; render(); } else spMediaDone(v); });
+    if (buf) spPlayBuf(buf);
+    return;
+  }
+  if (buf) { spPlayBuf(buf); return; }
+  const el = spAudio(); el.src = url; el.currentTime = 0;
   el.play().catch(x => { if (x && x.name === 'NotAllowedError') { SP.blocked = true; render(); } else spMediaDone(el); });
+}
+function spPlayBuf(buf) {
+  if (SP.src) { SP.src.onended = null; try { SP.src.stop(); } catch (x) {} }
+  const ac = SP.ac, s = SP.src = ac.createBufferSource(); s.buffer = buf; s.connect(ac.destination);
+  s.onended = () => { if (SP.src === s) { SP.src = null; spMediaDone(SP_WA); } };
+  s.start();
+  if (ac.state !== 'running') { SP.blocked = 'ac'; render(); }  // 소리가 잠겨 있으면 ▶ Play
+  // 아이폰은 끊겼다 돌아오면 소리 장치가 '켜짐'인 채 멈춰 버리기도 한다: 끝날 때가 한참 지나도 안 끝나면 ▶ Play
+  setTimeout(() => { if (SP.src === s && !SP.blocked) { SP.blocked = true; render(); } }, (buf.duration + 3) * 1000);
+  const e = S.exam, nx = e && spSteps(e.test)[e.step + 1]; if (nx) spBuf(spSnd(nx.clip)).catch(() => {});  // 다음 음원을 미리 풀어 둔다
 }
 // 화면을 다시 그리면 영상 자리(#spv)가 새로 생기므로 같은 영상 요소를 다시 넣는다 (재생이 끊기지 않게)
 function spPlaceVideo() { const box = document.getElementById('spv'); if (box && SP.vid && SP.vid.parentNode !== box) box.appendChild(SP.vid); }
 function spMediaDone(el) {
   const e = S.exam; if (!e || e.kind !== 'sp' || S.screen !== 'exam') return;
   const st = spSteps(e.test)[e.step]; if (!st) return;
-  if (e.phase === 'play') { if (st.t === 'intro') { e.step++; spEnter(); return; } e.phase = 'beep'; render(); spPlay('beep.mp3'); return; }
-  if (e.phase === 'beep' && el === SP.au) spRecord(st);
+  if (e.phase === 'play') { if (st.t === 'intro') { e.step++; spEnter(); return; } if (SP.vidWA && SP.vid) SP.vid.pause(); e.phase = 'beep'; render(); spPlay('beep.mp3'); return; }
+  if (e.phase === 'beep' && el !== SP.vid) spRecord(st);  // 영상이 늦게 끝난 신호로는 녹음을 시작하지 않는다
 }
 async function spRecord(st) {
   const e = S.exam, chunks = [], step = e.step, live = () => S.exam === e && e.step === step;
@@ -240,7 +308,7 @@ async function spRecord(st) {
     rec.onstop = () => { if (live()) spRecorded(st, new Blob(chunks, { type: (rec.mimeType || opts.mimeType || 'audio/webm').replace(/\s+/g, '') })); };
     rec.start();
   } catch (x) { SP.rec = null; spRecorded(st, null); return; }
-  e.phase = 'rec'; e.recEnds = Date.now() + st.secs * 1000; render();
+  e.phase = 'rec'; e.recEnds = Date.now() + st.secs * 1000; SP.blocked = false; render();
 }
 // 녹음 하나가 끝났을 때: 소리가 담겼으면(풀어서 1초 이상) 다음으로. 비었으면 마이크를 새로 켜서 같은 문제를 한 번 더
 async function spRecorded(st, blob) {
@@ -303,7 +371,8 @@ function viewSpExam() {
     const pack = SP.err ? `<div class="banner bad">${esc(SP.err)}</div><div><button class="btn" data-act="spRetry">Try again</button></div>`
       : `<div class="note num" id="sptxt">${SP.clips ? 'The test is ready.' : `Downloading the test… ${(SP.got / 1048576).toFixed(1)} MB`}</div>`;
     const c = SP.check, mic = c === 'run' ? `<div class="sprecing"><span class="dot-rec" aria-hidden="true"></span>${esc(SP.checkMsg)}</div>`
-      : c && c.url ? `<div class="stack"><div class="note">The microphone works. Listen to your test recording:</div><audio controls src="${c.url}"></audio>
+      : c && c.url ? `<div class="stack"><div class="note">The microphone works. Listen to your test recording:</div>
+          ${c.buf && SP.ac ? '<div><button class="btn" data-act="spCheckPlay">▶ Listen</button></div>' : `<video class="spchk" controls playsinline src="${c.url}"></video>`}
           ${c.low ? '<div class="banner">Your voice was very quiet. Speak louder or move closer to the microphone, then test again.</div>' : ''}
           <div><button class="btn" data-act="spMic">Test again</button></div></div>`
       : `${SP.mic && SP.mic !== 'ok' ? `<div class="banner bad">${esc(SP.mic)}</div>` : ''}${c === 'fail' ? '<div class="banner bad">Your voice could not be recorded. Close other apps that use the microphone, reload this page and try again. If it still fails, try another device.</div>' : ''}
@@ -341,7 +410,7 @@ function viewSpExam() {
 async function spMicFix() {
   const e = S.exam, step = e && e.step, st = e && e.phase === 'mic' && spSteps(e.test)[step]; if (!st) return;
   e.phase = 'fix'; SP.mic = ''; render();  // 두 번 눌러도 한 번만 (버튼이 사라진다)
-  const au = spAudio(); au.src = lcSilent(); au.play().catch(() => {});  // 이 탭으로 재생기도 깨운다 (지난 삐 소리를 다시 틀지 않게 무음으로)
+  if (!spCtx()) { const au = spAudio(); au.src = lcSilent(); au.play().catch(() => {}); }  // 이 탭으로 소리도 깨운다 (지난 삐 소리를 다시 틀지 않게)
   spLog('fix');
   try { await spGetMic(); } catch (x) { if (S.exam !== e || e.phase !== 'fix') return; e.phase = 'mic'; SP.mic = 'The microphone could not be turned on. Allow microphone access for this site, then tap the button again.'; render(); return; }
   if (S.exam !== e || e.step !== step || e.phase !== 'fix') return;
@@ -356,13 +425,21 @@ document.addEventListener('click', ev => {
   if (act === 'spStart') startSp(+b.dataset.id);
   else if (act === 'spMic') spCheck();
   else if (act === 'spMicFix') spMicFix();
+  else if (act === 'spCheckPlay') { const c = SP.check; if (c && c.buf && spCtx()) { if (SP.src) { SP.src.onended = null; try { SP.src.stop(); } catch (x) {} } const s = SP.src = SP.ac.createBufferSource(); s.buffer = c.buf; s.connect(SP.ac.destination); s.onended = () => { if (SP.src === s) SP.src = null; }; s.start(); } }
   else if (act === 'spSkip') { const e = S.exam, st = e && e.phase === 'mic' && spSteps(e.test)[e.step]; if (!st) return; delete SP.again[st.k]; spLog('skip'); e.step++; spEnter(); }
   else if (act === 'spRetry') spLoad();
   else if (act === 'spBegin') spBegin();
   else if (act === 'spQuit') spQuit();
   else if (act === 'spPlay') {  // 휴대폰이 재생을 막았을 때: 누르면 그 자리부터 다시 튼다
-    const e = S.exam, st = e && spSteps(e.test)[e.step]; if (!st) return;
-    SP.blocked = false; render(); spPlay(e.phase === 'beep' ? 'beep.mp3' : st.clip);
+    const e = S.exam, st = e && (e.phase === 'play' || e.phase === 'beep') && spSteps(e.test)[e.step];
+    SP.blocked = false; render(); if (!st) return;  // 문제·삐 소리가 나올 때만 (녹음 중에 눌러 문제가 다시 나오지 않게)
+    if (e.phase === 'beep' && SP.ac && !SP.src) return;  // 삐 소리는 이미 끝났고 녹음을 준비하는 중
+    // 아이폰은 끊겼다 돌아오면 resume()이 끝나지 않기도 한다: 소리 장치를 탭 안에서 새로 만들고 지금 음원을 처음부터 (푼 음원은 그대로 쓴다)
+    if (SP.ac) {
+      if (SP.src) { SP.src.onended = null; try { SP.src.stop(); } catch (x) {} SP.src = null; }
+      const old = SP.ac; SP.ac = null; try { old.close().catch(() => {}); } catch (x) {}
+    }
+    spCtx(); spPlay(e.phase === 'beep' ? 'beep.mp3' : st.clip);
   }
 });
 // 시험 중에 창을 닫거나 새로고침하면 녹음이 사라진다고 알린다

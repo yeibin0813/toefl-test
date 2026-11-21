@@ -168,6 +168,7 @@ button.ins.on { background: var(--accent); color: var(--accent-ink); }
 .spimg { max-width: 100%; max-height: 360px; border-radius: 10px; }
 .spvbox { width: 100%; max-width: 640px; aspect-ratio: 16 / 9; background: #000; border-radius: 10px; overflow: hidden; }
 .spvid { width: 100%; height: 100%; display: block; object-fit: contain; }
+.spchk { width: 100%; max-width: 360px; height: 44px; }  /* 확인 녹음 예비 재생기 (소리만이라 막대 높이만) */
 .sprecing { width: 100%; max-width: 420px; display: grid; gap: 8px; justify-items: center; font-weight: 600; color: var(--bad); }
 .dot-rec { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: var(--bad); margin-right: 6px; animation: recblink 1s infinite; }
 @keyframes recblink { 50% { opacity: .25; } }
